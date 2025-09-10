@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Transport Admin Dashboard Design System */
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 215 25% 27%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 27%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 27%;
+
+    /* Transport Blue Theme */
+    --primary: 202 94% 39%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 202 85% 85%;
+    --primary-dark: 202 94% 25%;
+
+    --secondary: 210 17% 95%;
+    --secondary-foreground: 215 25% 27%;
+
+    --muted: 210 17% 95%;
+    --muted-foreground: 215 13% 53%;
+
+    --accent: 197 92% 81%;
+    --accent-foreground: 215 25% 27%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --success-light: 142 69% 85%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --warning-light: 38 84% 85%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 13% 91%;
+    --input: 214 13% 91%;
+    --ring: 202 94% 39%;
+
+    --radius: 0.75rem;
+
+    /* Admin Dashboard Specific */
+    --dashboard-bg: 210 17% 98%;
+    --sidebar-bg: 215 25% 27%;
+    --sidebar-fg: 0 0% 100%;
+    --sidebar-accent: 202 94% 39%;
+    --sidebar-muted: 215 15% 45%;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-dark)));
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)), hsl(210 17% 99%));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(197 92% 61%) 100%);
+
+    /* Shadows */
+    --shadow-card: 0 4px 6px -1px hsl(var(--primary) / 0.1);
+    --shadow-elevated: 0 10px 25px -3px hsl(var(--primary) / 0.1);
+    --shadow-glow: 0 0 20px hsl(var(--primary) / 0.2);
+
+    /* Transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  }
+
+  .dark {
+    --background: 215 28% 17%;
+    --foreground: 0 0% 95%;
+
+    --card: 215 28% 17%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 215 28% 17%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 197 92% 81%;
+    --primary-foreground: 215 25% 27%;
+    --primary-light: 197 84% 65%;
+    --primary-dark: 197 92% 61%;
+
+    --secondary: 215 22% 22%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 215 22% 22%;
+    --muted-foreground: 215 10% 71%;
+
+    --accent: 202 94% 39%;
+    --accent-foreground: 0 0% 95%;
+
+    --success: 142 69% 58%;
+    --success-foreground: 215 25% 27%;
+
+    --warning: 38 84% 65%;
+    --warning-foreground: 215 25% 27%;
+
+    --destructive: 0 84% 70%;
+    --destructive-foreground: 215 25% 27%;
+
+    --border: 215 22% 22%;
+    --input: 215 22% 22%;
+    --ring: 197 92% 81%;
+
+    --dashboard-bg: 215 28% 17%;
+    --sidebar-bg: 215 32% 12%;
+    --sidebar-fg: 0 0% 95%;
+    --sidebar-accent: 197 92% 81%;
+    --sidebar-muted: 215 15% 65%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-dark)));
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)), hsl(215 25% 20%));
+    --gradient-hero: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(202 94% 49%) 100%);
+
+    --shadow-card: 0 4px 6px -1px hsl(0 0% 0% / 0.2);
+    --shadow-elevated: 0 10px 25px -3px hsl(0 0% 0% / 0.3);
+    --shadow-glow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
