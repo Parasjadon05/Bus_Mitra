@@ -1,13 +1,12 @@
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { onAuthStateChanged } from 'firebase/auth'
+import { auth } from '@/lib/firebase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { 
-  Bus, 
   MapPin, 
-  Clock, 
-  Users, 
-  Star, 
   Shield, 
   Smartphone, 
   Bell, 
@@ -15,17 +14,39 @@ import {
   TrendingUp,
   CheckCircle,
   ArrowRight,
-  Heart,
-  Zap
 } from 'lucide-react'
+import Navbar from '@/components/Navbar'
+import Footer from '@/components/Footer'
 
 export default function LandingPage() {
   const navigate = useNavigate()
+  const [isAuthenticated, setIsAuthenticated] = useState(false) // Auth state
+  const [loading, setLoading] = useState(true) // Loading state
+
+  // Sync auth state with Firebase and localStorage
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsAuthenticated(true)
+      } else {
+        const storedUser = localStorage.getItem('currentUser')
+        setIsAuthenticated(!!storedUser) // Fallback to localStorage
+      }
+      setLoading(false)
+    })
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe()
+  }, [])
 
   const handleGetStarted = () => {
-    navigate('/discover')
+    if (loading) return
+    if (isAuthenticated) {
+      navigate('/discover')
+    } else {
+      navigate('/signin')
+    }
   }
-
 
   const features = [
     {
@@ -96,29 +117,26 @@ export default function LandingPage() {
     'Access offline route maps'
   ]
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div className="flex items-center space-x-2">
-              <Bus className="h-8 w-8 text-blue-600" />
-              <h1 className="text-2xl font-bold text-gray-900">BusMitra</h1>
-            </div>
-            <Button variant="outline" onClick={handleGetStarted}>
-              Get Started
-            </Button>
-          </div>
-        </div>
-      </header>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col">
+        <Navbar />
+        <main className="flex-grow flex items-center justify-center">
+          <div className="h-16 w-64 bg-gray-200 animate-pulse rounded" />
+        </main>
+        <Footer />
+      </div>
+    )
+  }
 
-      {/* Hero Section */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  return (
+    <div className="min-h-screen bg-white flex flex-col">
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex-grow">
         <div className="text-center py-16">
           <h1 className="text-4xl md:text-6xl font-bold text-gray-900 mb-6">
             Never Miss Your
-            <span className="text-blue-600 block">Bus Again</span>
+            <span className="text-[#87281B] block">Bus Again</span>
           </h1>
           <p className="text-xl text-gray-600 mb-8 max-w-3xl mx-auto">
             Track buses in real-time, get smart notifications, and plan your perfect journey. 
@@ -128,7 +146,7 @@ export default function LandingPage() {
             <Button 
               size="lg" 
               onClick={handleGetStarted}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 text-lg"
+              className="bg-[#87281B] hover:bg-[#601c13] text-white px-8 py-3 text-lg"
             >
               Start Tracking Now
               <ArrowRight className="ml-2 h-5 w-5" />
@@ -139,8 +157,6 @@ export default function LandingPage() {
           </div>
         </div>
 
-
-        {/* Features Section */}
         <div className="py-16">
           <div className="text-center mb-12">
             <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
@@ -169,10 +185,9 @@ export default function LandingPage() {
           </div>
         </div>
 
-        {/* Benefits Section */}
         <div className="py-16 bg-white rounded-2xl shadow-sm">
           <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+            <h2 className="text-3xl md:text-4xl font-bold text-[#87281B] mb-4">
               Why Choose BusMitra?
             </h2>
             <p className="text-lg text-gray-600 max-w-2xl mx-auto">
@@ -198,102 +213,8 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
-
-        {/* Testimonials Section */}
-        <div className="py-16">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
-              What Our Users Say
-            </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Real stories from real commuters who transformed their daily travel experience
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {testimonials.map((testimonial, index) => (
-              <Card key={index} className="text-center">
-                <CardContent className="pt-6">
-                  <div className="flex justify-center mb-4">
-                    {[...Array(testimonial.rating)].map((_, i) => (
-                      <Star key={i} className="h-5 w-5 text-yellow-400 fill-current" />
-                    ))}
-                  </div>
-                  <p className="text-gray-600 mb-4 italic">"{testimonial.text}"</p>
-                  <div>
-                    <div className="font-semibold text-gray-900">{testimonial.name}</div>
-                    <div className="text-sm text-gray-500">{testimonial.location}</div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-
-        {/* CTA Section */}
-        <div className="py-16 text-center">
-          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-12 text-white">
-            <h2 className="text-3xl md:text-4xl font-bold mb-4">
-              Ready to Transform Your Commute?
-            </h2>
-            <p className="text-xl mb-8 opacity-90 max-w-2xl mx-auto">
-              Join thousands of smart commuters and never miss your bus again. 
-              Start your journey with BusMitra today!
-            </p>
-            <Button 
-              size="lg" 
-              onClick={handleGetStarted}
-              className="bg-white text-blue-600 hover:bg-gray-100 px-8 py-3 text-lg"
-            >
-              Get Started Free
-              <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-          </div>
-        </div>
       </main>
 
-      {/* Footer */}
-      <footer className="bg-white border-t">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            <div className="col-span-1 md:col-span-2">
-              <div className="flex items-center space-x-2 mb-4">
-                <Bus className="h-8 w-8 text-blue-600" />
-                <h3 className="text-2xl font-bold text-gray-900">BusMitra</h3>
-              </div>
-              <p className="text-gray-600 mb-4 max-w-md">
-                Making public transportation smarter, more reliable, and accessible for everyone. 
-                Your trusted companion for seamless daily commutes.
-              </p>
-              <div className="flex space-x-4">
-                <Badge variant="outline">iOS App</Badge>
-                <Badge variant="outline">Android App</Badge>
-                <Badge variant="outline">Web App</Badge>
-              </div>
-            </div>
-            <div>
-              <h4 className="font-semibold text-gray-900 mb-4">Features</h4>
-              <ul className="space-y-2 text-gray-600">
-                <li>Real-time Tracking</li>
-                <li>Route Planning</li>
-                <li>Smart Notifications</li>
-                <li>Live Updates</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-gray-900 mb-4">Support</h4>
-              <ul className="space-y-2 text-gray-600">
-                <li>Help Center</li>
-                <li>Contact Us</li>
-                <li>Privacy Policy</li>
-                <li>Terms of Service</li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t mt-8 pt-8 text-center text-gray-600">
-            <p>&copy; 2024 BusMitra. Making public transportation smarter for everyone.</p>
-          </div>
-        </div>
-      </footer>
     </div>
   )
 }
