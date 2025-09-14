@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Plus, Search, Edit, Trash2, Eye, Filter, Loader2 } from "lucide-react";
+import { Plus, Search, Edit, Trash2, Bus as BusIcon, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,7 +18,6 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -31,9 +30,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Check, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { busService, Bus, routeService, Route, stopService, Stop } from "@/lib/firebaseService";
+import { busService, routeService, Bus, Route } from "@/lib/firebaseService";
 
 // Form validation schema
 const busSchema = z.object({
@@ -42,11 +54,9 @@ const busSchema = z.object({
   capacity: z.number().min(1, "Capacity must be at least 1"),
   model: z.string().min(1, "Model is required"),
   manufacturer: z.string().min(1, "Manufacturer is required"),
-  year: z.number().min(1900).max(new Date().getFullYear() + 1),
+  year: z.number().min(1900, "Year must be valid"),
+  assignedRoute: z.string().min(1, "Route assignment is required"),
   status: z.enum(["active", "maintenance", "inactive"]),
-  driverId: z.string().optional(),
-  goingRoute: z.string().optional(),
-  comingRoute: z.string().optional(),
 });
 
 type BusFormData = z.infer<typeof busSchema>;
@@ -54,14 +64,14 @@ type BusFormData = z.infer<typeof busSchema>;
 export default function Buses() {
   const [buses, setBuses] = useState<Bus[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
-  const [stops, setStops] = useState<Stop[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingBus, setEditingBus] = useState<Bus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [routeSearchOpen, setRouteSearchOpen] = useState(false);
+  const [editRouteSearchOpen, setEditRouteSearchOpen] = useState(false);
   const { toast } = useToast();
 
   const {
@@ -69,45 +79,31 @@ export default function Buses() {
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors },
   } = useForm<BusFormData>({
     resolver: zodResolver(busSchema),
   });
 
+  // Watch form values
+  const assignedRoute = watch("assignedRoute");
+
   // Load buses and routes from Firebase
   useEffect(() => {
-    loadData();
+    loadBuses();
+    loadRoutes();
   }, []);
 
-  const getStopName = (stopId: string): string => {
-    const stop = stops.find(s => s.id === stopId);
-    return stop ? stop.stopName : stopId;
-  };
-
-  const loadData = async () => {
+  const loadBuses = async () => {
     try {
       setIsLoading(true);
-      const [busesData, routesData, stopsData] = await Promise.all([
-        busService.getAll(),
-        routeService.getAll(),
-        stopService.getAll()
-      ]);
+      const busesData = await busService.getAll();
       setBuses(busesData);
-      setRoutes(routesData);
-      setStops(stopsData);
     } catch (error: any) {
-      console.error("Error loading data:", error);
-      let errorMessage = "Failed to load data. Please try again.";
-      
-      if (error.code === 'permission-denied') {
-        errorMessage = "Permission denied. Please check your Firebase security rules.";
-      } else if (error.code === 'unavailable') {
-        errorMessage = "Firebase service is unavailable. Please check your connection.";
-      }
-      
+      console.error("Error loading buses:", error);
       toast({
         title: "Error",
-        description: errorMessage,
+        description: "Failed to load buses. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -115,18 +111,44 @@ export default function Buses() {
     }
   };
 
+  const loadRoutes = async () => {
+    try {
+      const routesData = await routeService.getAll();
+      console.log("Routes loaded for bus assignment:", routesData);
+      const activeRoutes = routesData.filter(route => route.active === true);
+      console.log("Active routes for assignment:", activeRoutes);
+      setRoutes(activeRoutes);
+    } catch (error: any) {
+      console.error("Error loading routes:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load routes. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const getRouteName = (routeId: string): string => {
+    const route = routes.find(r => r.id === routeId);
+    return route ? route.name : routeId;
+  };
+
   // CRUD Operations
   const onSubmit = async (data: BusFormData) => {
     try {
       setIsSubmitting(true);
       
-      // Handle route assignment - convert "none" to undefined
       const busData = {
-        ...data,
-        goingRoute: data.goingRoute === "none" ? undefined : data.goingRoute,
-        comingRoute: data.comingRoute === "none" ? undefined : data.comingRoute
+        busNumber: data.busNumber,
+        licensePlate: data.licensePlate,
+        capacity: data.capacity,
+        model: data.model,
+        manufacturer: data.manufacturer,
+        year: data.year,
+        assignedRoute: data.assignedRoute,
+        status: data.status
       };
-      
+
       if (editingBus) {
         await busService.update(editingBus.id!, busData);
         toast({
@@ -144,7 +166,9 @@ export default function Buses() {
       }
       reset();
       setEditingBus(null);
-      loadData();
+      setRouteSearchOpen(false);
+      setEditRouteSearchOpen(false);
+      loadBuses();
     } catch (error) {
       console.error("Error saving bus:", error);
       toast({
@@ -159,16 +183,14 @@ export default function Buses() {
 
   const handleEdit = (bus: Bus) => {
     setEditingBus(bus);
-    setValue("busNumber", bus.busNumber);
-    setValue("licensePlate", bus.licensePlate);
-    setValue("capacity", bus.capacity);
-    setValue("model", bus.model);
-    setValue("manufacturer", bus.manufacturer);
-    setValue("year", bus.year);
-    setValue("status", bus.status);
-    setValue("driverId", bus.driverId || "");
-    setValue("goingRoute", bus.goingRoute || "none");
-    setValue("comingRoute", bus.comingRoute || "none");
+    setValue("busNumber", bus.busNumber || "");
+    setValue("licensePlate", bus.licensePlate || "");
+    setValue("capacity", bus.capacity || 0);
+    setValue("model", bus.model || "");
+    setValue("manufacturer", bus.manufacturer || "");
+    setValue("year", bus.year || new Date().getFullYear());
+    setValue("assignedRoute", bus.assignedRoute || "");
+    setValue("status", bus.status || "active");
     setIsEditDialogOpen(true);
   };
 
@@ -192,15 +214,16 @@ export default function Buses() {
     }
   };
 
-  const filteredBuses = buses.filter(bus => {
-    const matchesSearch = bus.busNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         bus.licensePlate.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         bus.model.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterStatus === "all" || bus.status === filterStatus;
-    return matchesSearch && matchesFilter;
-  });
+  const filteredBuses = buses.filter(bus =>
+    bus.busNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    bus.licensePlate?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    bus.model?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    bus.manufacturer?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    getRouteName(bus.assignedRoute || "").toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const getStatusColor = (status: string) => {
+    if (!status) return "bg-muted text-muted-foreground";
     switch (status) {
       case "active":
         return "bg-success text-success-foreground";
@@ -214,8 +237,14 @@ export default function Buses() {
   };
 
   const getStatusLabel = (status: string) => {
+    if (!status) return "Unknown";
     return status.charAt(0).toUpperCase() + status.slice(1);
   };
+
+  const totalBuses = buses.length;
+  const activeBuses = buses.filter(b => b.status === "active").length;
+  const maintenanceBuses = buses.filter(b => b.status === "maintenance").length;
+  const totalCapacity = buses.reduce((sum, bus) => sum + (bus.capacity || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -223,7 +252,7 @@ export default function Buses() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold">Bus Management</h1>
-          <p className="text-muted-foreground">Manage your bus fleet and track vehicle information</p>
+          <p className="text-muted-foreground">Manage bus fleet and assign routes to buses</p>
         </div>
         
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
@@ -236,9 +265,6 @@ export default function Buses() {
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Add New Bus</DialogTitle>
-              <DialogDescription>
-                Add a new bus to your fleet. Fill in all the required information.
-              </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
               <div className="grid grid-cols-2 gap-4">
@@ -258,7 +284,7 @@ export default function Buses() {
                   <Label htmlFor="licensePlate">License Plate</Label>
                   <Input 
                     id="licensePlate" 
-                    placeholder="KA-05-AB-1234" 
+                    placeholder="DL-01-AB-1234" 
                     {...register("licensePlate")}
                     className={errors.licensePlate ? "border-destructive" : ""}
                   />
@@ -267,7 +293,7 @@ export default function Buses() {
                   )}
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="model">Model</Label>
@@ -297,24 +323,11 @@ export default function Buses() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="capacity">Capacity</Label>
-                  <Input 
-                    id="capacity" 
-                    type="number" 
-                    placeholder="40" 
-                    {...register("capacity", { valueAsNumber: true })}
-                    className={errors.capacity ? "border-destructive" : ""}
-                  />
-                  {errors.capacity && (
-                    <p className="text-sm text-destructive">{errors.capacity.message}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
                   <Label htmlFor="year">Year</Label>
                   <Input 
                     id="year" 
-                    type="number" 
-                    placeholder="2024" 
+                    type="number"
+                    placeholder="2023" 
                     {...register("year", { valueAsNumber: true })}
                     className={errors.year ? "border-destructive" : ""}
                   />
@@ -322,63 +335,92 @@ export default function Buses() {
                     <p className="text-sm text-destructive">{errors.year.message}</p>
                   )}
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <Select onValueChange={(value) => setValue("status", value as "active" | "maintenance" | "inactive")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="maintenance">Maintenance</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                  </SelectContent>
-                </Select>
-                {errors.status && (
-                  <p className="text-sm text-destructive">{errors.status.message}</p>
-                )}
+                <div className="space-y-2">
+                  <Label htmlFor="capacity">Capacity</Label>
+                  <Input 
+                    id="capacity" 
+                    type="number"
+                    placeholder="50" 
+                    {...register("capacity", { valueAsNumber: true })}
+                    className={errors.capacity ? "border-destructive" : ""}
+                  />
+                  {errors.capacity && (
+                    <p className="text-sm text-destructive">{errors.capacity.message}</p>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="goingRoute">Going Route</Label>
-                  <Select onValueChange={(value) => setValue("goingRoute", value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select going route (optional)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">No route assigned</SelectItem>
-                      {routes.map((route) => (
-                        <SelectItem key={route.id} value={route.id!}>
-                          {route.routeName} ({getStopName(route.from || "")} → {getStopName(route.to || "")})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {errors.goingRoute && (
-                    <p className="text-sm text-destructive">{errors.goingRoute.message}</p>
+                  <Label htmlFor="assignedRoute">Assigned Route</Label>
+                  <Popover open={routeSearchOpen} onOpenChange={setRouteSearchOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={routeSearchOpen}
+                        className="w-full justify-between h-10 px-3 py-2 text-left font-normal"
+                      >
+                        <span className="truncate">
+                          {assignedRoute ? 
+                            routes.find((route) => route.id === assignedRoute)?.name || "Select route..." :
+                            "Select route..."
+                          }
+                        </span>
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+                      <Command>
+                        <CommandInput placeholder="Search routes..." />
+                        <CommandList>
+                          <CommandEmpty>No routes found.</CommandEmpty>
+                          <CommandGroup>
+                            {routes.map((route) => (
+                              <CommandItem
+                                key={route.id}
+                                value={route.name}
+                                onSelect={() => {
+                                  setValue("assignedRoute", route.id!);
+                                  setRouteSearchOpen(false);
+                                }}
+                              >
+                                <Check
+                                  className={`mr-2 h-4 w-4 ${
+                                    assignedRoute === route.id ? "opacity-100" : "opacity-0"
+                                  }`}
+                                />
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{route.name}</span>
+                                  <span className="text-sm text-muted-foreground">
+                                    {route.startPoint} → {route.endPoint}
+                                  </span>
+                                </div>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  {errors.assignedRoute && (
+                    <p className="text-sm text-destructive">{errors.assignedRoute.message}</p>
                   )}
                 </div>
-                
                 <div className="space-y-2">
-                  <Label htmlFor="comingRoute">Coming Route</Label>
-                  <Select onValueChange={(value) => setValue("comingRoute", value)}>
+                  <Label htmlFor="status">Status</Label>
+                  <Select onValueChange={(value) => setValue("status", value as "active" | "maintenance" | "inactive")}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select coming route (optional)" />
+                      <SelectValue placeholder="Select status" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">No route assigned</SelectItem>
-                      {routes.map((route) => (
-                        <SelectItem key={route.id} value={route.id!}>
-                          {route.routeName} ({getStopName(route.from || "")} → {getStopName(route.to || "")})
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="maintenance">Maintenance</SelectItem>
+                      <SelectItem value="inactive">Inactive</SelectItem>
                     </SelectContent>
                   </Select>
-                  {errors.comingRoute && (
-                    <p className="text-sm text-destructive">{errors.comingRoute.message}</p>
+                  {errors.status && (
+                    <p className="text-sm text-destructive">{errors.status.message}</p>
                   )}
                 </div>
               </div>
@@ -389,6 +431,7 @@ export default function Buses() {
                   variant="outline" 
                   onClick={() => {
                     setIsAddDialogOpen(false);
+                    setRouteSearchOpen(false);
                     reset();
                   }}
                 >
@@ -417,10 +460,10 @@ export default function Buses() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Total Buses</p>
-                <p className="text-2xl font-bold">{buses.length}</p>
+                <p className="text-2xl font-bold">{totalBuses}</p>
               </div>
               <div className="h-8 w-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                <div className="h-4 w-4 bg-primary rounded-sm"></div>
+                <BusIcon className="h-4 w-4 text-primary" />
               </div>
             </div>
           </CardContent>
@@ -429,9 +472,9 @@ export default function Buses() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Active</p>
+                <p className="text-sm text-muted-foreground">Active Buses</p>
                 <p className="text-2xl font-bold text-success">
-                  {buses.filter(b => b.status === "active").length}
+                  {activeBuses}
                 </p>
               </div>
               <div className="h-8 w-8 bg-success/10 rounded-lg flex items-center justify-center">
@@ -446,7 +489,7 @@ export default function Buses() {
               <div>
                 <p className="text-sm text-muted-foreground">Maintenance</p>
                 <p className="text-2xl font-bold text-warning">
-                  {buses.filter(b => b.status === "maintenance").length}
+                  {maintenanceBuses}
                 </p>
               </div>
               <div className="h-8 w-8 bg-warning/10 rounded-lg flex items-center justify-center">
@@ -459,46 +502,28 @@ export default function Buses() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Inactive</p>
-                <p className="text-2xl font-bold text-muted-foreground">
-                  {buses.filter(b => b.status === "inactive").length}
-                </p>
+                <p className="text-sm text-muted-foreground">Total Capacity</p>
+                <p className="text-2xl font-bold">{totalCapacity}</p>
               </div>
-              <div className="h-8 w-8 bg-muted/20 rounded-lg flex items-center justify-center">
-                <div className="h-4 w-4 bg-muted rounded-sm"></div>
+              <div className="h-8 w-8 bg-accent/20 rounded-lg flex items-center justify-center">
+                <div className="h-4 w-4 bg-accent rounded-full"></div>
               </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Filters */}
+      {/* Search */}
       <Card className="bg-gradient-card shadow-card">
         <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search buses..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-full sm:w-48">
-                <Filter className="mr-2 h-4 w-4" />
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="maintenance">Maintenance</SelectItem>
-                <SelectItem value="inactive">Inactive</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search buses..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
           </div>
         </CardContent>
       </Card>
@@ -515,10 +540,9 @@ export default function Buses() {
                 <TableHead>Bus Number</TableHead>
                 <TableHead>License Plate</TableHead>
                 <TableHead>Model</TableHead>
-                <TableHead>Manufacturer</TableHead>
-                <TableHead>Capacity</TableHead>
                 <TableHead>Year</TableHead>
-                <TableHead>Routes</TableHead>
+                <TableHead>Capacity</TableHead>
+                <TableHead>Assigned Route</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -526,70 +550,33 @@ export default function Buses() {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8">
+                  <TableCell colSpan={8} className="text-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
                     <p className="text-muted-foreground">Loading buses...</p>
                   </TableCell>
                 </TableRow>
               ) : filteredBuses.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8">
+                  <TableCell colSpan={8} className="text-center py-8">
                     <p className="text-muted-foreground">No buses found</p>
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredBuses.map((bus) => (
                   <TableRow key={bus.id}>
-                    <TableCell className="font-medium">{bus.busNumber}</TableCell>
+                    <TableCell className="font-medium">
+                      <div>
+                        <div className="font-semibold">{bus.busNumber}</div>
+                        <div className="text-sm text-muted-foreground">{bus.manufacturer}</div>
+                      </div>
+                    </TableCell>
                     <TableCell>{bus.licensePlate}</TableCell>
                     <TableCell>{bus.model}</TableCell>
-                    <TableCell>{bus.manufacturer}</TableCell>
-                    <TableCell>{bus.capacity}</TableCell>
                     <TableCell>{bus.year}</TableCell>
+                    <TableCell>{bus.capacity} seats</TableCell>
                     <TableCell>
-                      <div className="space-y-1">
-                        <div className="text-sm">
-                          <span className="font-medium text-green-600">Going:</span>
-                          {bus.goingRoute && bus.goingRoute !== "none" ? (
-                            (() => {
-                              const route = routes.find(r => r.id === bus.goingRoute);
-                              return route ? (
-                                <span className="ml-1">
-                                  {route.routeName}
-                                  <br />
-                                  <span className="text-muted-foreground text-xs">
-                                    {getStopName(route.from || "")} → {getStopName(route.to || "")}
-                                  </span>
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground text-xs ml-1">Route not found</span>
-                              );
-                            })()
-                          ) : (
-                            <span className="text-muted-foreground text-xs ml-1">No route</span>
-                          )}
-                        </div>
-                        <div className="text-sm">
-                          <span className="font-medium text-blue-600">Coming:</span>
-                          {bus.comingRoute && bus.comingRoute !== "none" ? (
-                            (() => {
-                              const route = routes.find(r => r.id === bus.comingRoute);
-                              return route ? (
-                                <span className="ml-1">
-                                  {route.routeName}
-                                  <br />
-                                  <span className="text-muted-foreground text-xs">
-                                    {getStopName(route.from || "")} → {getStopName(route.to || "")}
-                                  </span>
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground text-xs ml-1">Route not found</span>
-                              );
-                            })()
-                          ) : (
-                            <span className="text-muted-foreground text-xs ml-1">No route</span>
-                          )}
-                        </div>
+                      <div className="text-sm">
+                        {getRouteName(bus.assignedRoute || "")}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -599,9 +586,6 @@ export default function Buses() {
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
-                        <Button variant="ghost" size="sm">
-                          <Eye className="h-4 w-4" />
-                        </Button>
                         <Button 
                           variant="ghost" 
                           size="sm"
@@ -632,9 +616,6 @@ export default function Buses() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit Bus</DialogTitle>
-            <DialogDescription>
-              Update the bus information. You can modify any field as needed.
-            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
             <div className="grid grid-cols-2 gap-4">
@@ -654,7 +635,7 @@ export default function Buses() {
                 <Label htmlFor="edit-licensePlate">License Plate</Label>
                 <Input 
                   id="edit-licensePlate" 
-                  placeholder="KA-05-AB-1234" 
+                  placeholder="DL-01-AB-1234" 
                   {...register("licensePlate")}
                   className={errors.licensePlate ? "border-destructive" : ""}
                 />
@@ -663,7 +644,7 @@ export default function Buses() {
                 )}
               </div>
             </div>
-            
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="edit-model">Model</Label>
@@ -693,24 +674,11 @@ export default function Buses() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="edit-capacity">Capacity</Label>
-                <Input 
-                  id="edit-capacity" 
-                  type="number" 
-                  placeholder="40" 
-                  {...register("capacity", { valueAsNumber: true })}
-                  className={errors.capacity ? "border-destructive" : ""}
-                />
-                {errors.capacity && (
-                  <p className="text-sm text-destructive">{errors.capacity.message}</p>
-                )}
-              </div>
-              <div className="space-y-2">
                 <Label htmlFor="edit-year">Year</Label>
                 <Input 
                   id="edit-year" 
-                  type="number" 
-                  placeholder="2024" 
+                  type="number"
+                  placeholder="2023" 
                   {...register("year", { valueAsNumber: true })}
                   className={errors.year ? "border-destructive" : ""}
                 />
@@ -718,63 +686,92 @@ export default function Buses() {
                   <p className="text-sm text-destructive">{errors.year.message}</p>
                 )}
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-status">Status</Label>
-              <Select onValueChange={(value) => setValue("status", value as "active" | "maintenance" | "inactive")}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="maintenance">Maintenance</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.status && (
-                <p className="text-sm text-destructive">{errors.status.message}</p>
-              )}
+              <div className="space-y-2">
+                <Label htmlFor="edit-capacity">Capacity</Label>
+                <Input 
+                  id="edit-capacity" 
+                  type="number"
+                  placeholder="50" 
+                  {...register("capacity", { valueAsNumber: true })}
+                  className={errors.capacity ? "border-destructive" : ""}
+                />
+                {errors.capacity && (
+                  <p className="text-sm text-destructive">{errors.capacity.message}</p>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="edit-goingRoute">Going Route</Label>
-                <Select onValueChange={(value) => setValue("goingRoute", value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select going route (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No route assigned</SelectItem>
-                    {routes.map((route) => (
-                      <SelectItem key={route.id} value={route.id!}>
-                        {route.routeName} ({getStopName(route.from || "")} → {getStopName(route.to || "")})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {errors.goingRoute && (
-                  <p className="text-sm text-destructive">{errors.goingRoute.message}</p>
+                <Label htmlFor="edit-assignedRoute">Assigned Route</Label>
+                <Popover open={editRouteSearchOpen} onOpenChange={setEditRouteSearchOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={editRouteSearchOpen}
+                      className="w-full justify-between h-10 px-3 py-2 text-left font-normal"
+                    >
+                      <span className="truncate">
+                        {assignedRoute ? 
+                          routes.find((route) => route.id === assignedRoute)?.name || "Select route..." :
+                          "Select route..."
+                        }
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+                    <Command>
+                      <CommandInput placeholder="Search routes..." />
+                      <CommandList>
+                        <CommandEmpty>No routes found.</CommandEmpty>
+                        <CommandGroup>
+                          {routes.map((route) => (
+                            <CommandItem
+                              key={route.id}
+                              value={route.name}
+                              onSelect={() => {
+                                setValue("assignedRoute", route.id!);
+                                setEditRouteSearchOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={`mr-2 h-4 w-4 ${
+                                  assignedRoute === route.id ? "opacity-100" : "opacity-0"
+                                }`}
+                              />
+                              <div className="flex flex-col">
+                                <span className="font-medium">{route.name}</span>
+                                <span className="text-sm text-muted-foreground">
+                                  {route.startPoint} → {route.endPoint}
+                                </span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {errors.assignedRoute && (
+                  <p className="text-sm text-destructive">{errors.assignedRoute.message}</p>
                 )}
               </div>
-              
               <div className="space-y-2">
-                <Label htmlFor="edit-comingRoute">Coming Route</Label>
-                <Select onValueChange={(value) => setValue("comingRoute", value)}>
+                <Label htmlFor="edit-status">Status</Label>
+                <Select onValueChange={(value) => setValue("status", value as "active" | "maintenance" | "inactive")}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select coming route (optional)" />
+                    <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No route assigned</SelectItem>
-                    {routes.map((route) => (
-                      <SelectItem key={route.id} value={route.id!}>
-                        {route.routeName} ({getStopName(route.from || "")} → {getStopName(route.to || "")})
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="maintenance">Maintenance</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
                   </SelectContent>
                 </Select>
-                {errors.comingRoute && (
-                  <p className="text-sm text-destructive">{errors.comingRoute.message}</p>
+                {errors.status && (
+                  <p className="text-sm text-destructive">{errors.status.message}</p>
                 )}
               </div>
             </div>
@@ -785,6 +782,7 @@ export default function Buses() {
                 variant="outline" 
                 onClick={() => {
                   setIsEditDialogOpen(false);
+                  setEditRouteSearchOpen(false);
                   reset();
                   setEditingBus(null);
                 }}

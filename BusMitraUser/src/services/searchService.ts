@@ -1,164 +1,260 @@
+import { googleMapsService, PlaceResult, Location } from './googleMapsService'
+import { routeService, Route, Bus, Driver } from './routeService'
+
 export interface SearchSuggestion {
   id: string
   address: string
   placeId?: string
-  coordinates?: {
-    lat: number
-    lng: number
-  }
+  location?: Location
   type?: string
 }
 
-export class SearchService {
-  private apiKey: string | undefined
-
-  constructor() {
-    this.apiKey = import.meta.env.VITE_TOMTOM_API_KEY
+export interface BusSearchResult {
+  route: Route
+  buses: Bus[]
+  fromLocation: {
+    name: string
+    address: string
+    location: Location
+    distance: number
   }
+  toLocation: {
+    name: string
+    address: string
+    location: Location
+    distance: number
+  }
+  connectionType: 'direct' | 'connecting'
+  totalDistance?: number
+  estimatedTime?: number
+  estimatedFare?: number
+}
 
-  async searchAddresses(query: string, limit: number = 5): Promise<SearchSuggestion[]> {
-    console.log('SearchService: searchAddresses called with query:', query)
-    if (!query || query.length < 2) {
-      console.log('SearchService: Query too short, returning empty array')
+export interface BusSearchParams {
+  fromLocation: string
+  toLocation: string
+  fromCoordinates?: Location
+  toCoordinates?: Location
+  maxDistance: number
+}
+
+export class SearchService {
+  /**
+   * Search for address suggestions using Google Places API
+   */
+  async searchAddresses(query: string, location?: Location, limit: number = 5): Promise<SearchSuggestion[]> {
+    try {
+      if (!query || query.length < 2) {
+        return []
+      }
+
+      const places = await googleMapsService.searchPlaces(query, location)
+      
+      return places.slice(0, limit).map((place, index) => ({
+        id: `place_${index}`,
+        address: place.formatted_address,
+        placeId: place.place_id,
+        location: place.geometry.location,
+        type: place.types?.[0] || 'establishment'
+      }))
+    } catch (error) {
+      console.error('Error searching addresses:', error)
       return []
     }
+  }
 
-    const searchPromises: Promise<SearchSuggestion[]>[] = []
-
-    // 1. TomTom Search API (FREE - 2500 requests/day)
-    console.log('SearchService: API Key available:', !!this.apiKey, 'Length:', this.apiKey?.length)
-    if (this.apiKey && this.apiKey !== 'YOUR_TOMTOM_API_KEY_HERE' && this.apiKey.length > 10) {
-      console.log('SearchService: Adding TomTom search to promises')
-      searchPromises.push(this.searchWithTomTom(query, limit))
-    }
-
-    // 2. OpenStreetMap Nominatim API (FREE - No limits but rate limited)
-    searchPromises.push(this.searchWithNominatim(query, limit))
-
+  /**
+   * Search for buses based on journey requirements
+   */
+  async searchBuses(params: BusSearchParams): Promise<BusSearchResult[]> {
     try {
-      console.log('SearchService: Starting search with', searchPromises.length, 'promises')
-      const results = await Promise.allSettled(searchPromises)
+      console.log('🔍 Starting bus search with params:', params)
       
-      const allSuggestions: SearchSuggestion[] = []
+      // Get all active routes
+      const routes = await routeService.getAllActiveRoutes()
+      console.log('📊 Found routes:', routes.length)
       
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          console.log('SearchService: Got', result.value.length, 'suggestions from API')
-          allSuggestions.push(...result.value)
-        } else {
-          console.log('SearchService: API call failed:', result.reason)
+      if (routes.length === 0) {
+        console.log('❌ No routes available')
+        return []
+      }
+
+      // Get coordinates for from and to locations
+      let fromLocation: Location
+      let toLocation: Location
+
+      if (params.fromCoordinates) {
+        fromLocation = params.fromCoordinates
+      } else {
+        const fromCoords = await googleMapsService.geocodeAddress(params.fromLocation)
+        if (!fromCoords) {
+          console.log('❌ Could not geocode from location')
+          return []
+        }
+        fromLocation = fromCoords
+      }
+
+      if (params.toCoordinates) {
+        toLocation = params.toCoordinates
+      } else {
+        const toCoords = await googleMapsService.geocodeAddress(params.toLocation)
+        if (!toCoords) {
+          console.log('❌ Could not geocode to location')
+          return []
+        }
+        toLocation = toCoords
+      }
+
+      console.log('📍 From location:', fromLocation)
+      console.log('📍 To location:', toLocation)
+
+      // Find routes that are close to both locations
+      const matchingRoutes = await this.findMatchingRoutes(routes, fromLocation, toLocation, params.maxDistance)
+      console.log('🎯 Matching routes found:', matchingRoutes.length)
+
+      // Get buses for each matching route
+      const searchResults: BusSearchResult[] = []
+      
+      for (const routeMatch of matchingRoutes) {
+        const buses = await routeService.getBusesByRoute(routeMatch.route.id)
+        
+        if (buses.length > 0) {
+          // Get addresses for the locations
+          const fromAddress = await googleMapsService.reverseGeocode(fromLocation) || params.fromLocation
+          const toAddress = await googleMapsService.reverseGeocode(toLocation) || params.toLocation
+
+          searchResults.push({
+            route: routeMatch.route,
+            buses: buses,
+            fromLocation: {
+              name: routeMatch.fromStop?.name || 'From Location',
+              address: fromAddress,
+              location: fromLocation,
+              distance: routeMatch.fromDistance
+            },
+            toLocation: {
+              name: routeMatch.toStop?.name || 'To Location',
+              address: toAddress,
+              location: toLocation,
+              distance: routeMatch.toDistance
+            },
+            connectionType: 'direct',
+            totalDistance: routeMatch.route.distance,
+            estimatedTime: routeMatch.route.estimatedTime,
+            estimatedFare: this.calculateFare(routeMatch.route.distance || 0)
+          })
         }
       }
 
-      // Remove duplicates and limit results
-      const uniqueSuggestions = this.removeDuplicates(allSuggestions)
-      console.log('SearchService: Returning', uniqueSuggestions.length, 'unique suggestions')
-      return uniqueSuggestions.slice(0, limit)
+      console.log('✅ Found search results:', searchResults.length)
+      return searchResults
 
     } catch (error) {
-      console.log('SearchService: Error in search:', error)
+      console.error('Error searching buses:', error)
       return []
     }
   }
 
-  private async searchWithTomTom(query: string, limit: number): Promise<SearchSuggestion[]> {
-    try {
-      const response = await fetch(
-        `https://api.tomtom.com/search/2/search/${encodeURIComponent(query)}.json?key=${this.apiKey}&limit=${limit}&countrySet=IN&typeahead=true`
-      )
+  /**
+   * Find routes that match the journey requirements
+   */
+  private async findMatchingRoutes(
+    routes: Route[], 
+    fromLocation: Location, 
+    toLocation: Location, 
+    maxDistance: number
+  ): Promise<Array<{
+    route: Route
+    fromStop?: { name: string; location: Location }
+    toStop?: { name: string; location: Location }
+    fromDistance: number
+    toDistance: number
+  }>> {
+    const matchingRoutes: Array<{
+      route: Route
+      fromStop?: { name: string; location: Location }
+      toStop?: { name: string; location: Location }
+      fromDistance: number
+      toDistance: number
+    }> = []
 
-      if (!response.ok) {
-        return []
+    for (const route of routes) {
+      if (!route.stops || route.stops.length === 0) {
+        continue
       }
 
-      const data = await response.json()
-      
-      return data.results?.map((result: any, index: number) => ({
-        id: `tomtom_${index}`,
-        address: result.address?.freeformAddress || result.poi?.name || 'Unknown address',
-        placeId: result.id,
-        coordinates: result.position ? {
-          lat: result.position.lat,
-          lng: result.position.lon
-        } : undefined,
-        type: result.type
-      })) || []
+      // Find the closest stop to from location
+      let closestFromStop: { name: string; location: Location } | undefined
+      let minFromDistance = Infinity
 
-    } catch (error) {
-      return []
-    }
-  }
+      // Find the closest stop to to location
+      let closestToStop: { name: string; location: Location } | undefined
+      let minToDistance = Infinity
 
-  private async searchWithNominatim(query: string, limit: number): Promise<SearchSuggestion[]> {
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=${limit}&countrycodes=in&addressdetails=1`
-      )
+      for (const stop of route.stops) {
+        const stopLocation: Location = {
+          lat: stop.latitude,
+          lng: stop.longitude
+        }
 
-      if (!response.ok) {
-        return []
-      }
+        const fromDistance = googleMapsService.calculateDistance(fromLocation, stopLocation)
+        const toDistance = googleMapsService.calculateDistance(toLocation, stopLocation)
 
-      const data = await response.json()
-      
-      return data.map((result: any, index: number) => ({
-        id: `nominatim_${index}`,
-        address: result.display_name,
-        placeId: result.place_id,
-        coordinates: {
-          lat: parseFloat(result.lat),
-          lng: parseFloat(result.lon)
-        },
-        type: result.type
-      }))
+        if (fromDistance < minFromDistance) {
+          minFromDistance = fromDistance
+          closestFromStop = {
+            name: stop.name,
+            location: stopLocation
+          }
+        }
 
-    } catch (error) {
-      return []
-    }
-  }
-
-  private removeDuplicates(suggestions: SearchSuggestion[]): SearchSuggestion[] {
-    const seen = new Set<string>()
-    return suggestions.filter(suggestion => {
-      const key = suggestion.address.toLowerCase().trim()
-      if (seen.has(key)) {
-        return false
-      }
-      seen.add(key)
-      return true
-    })
-  }
-
-  async getAddressFromCoordinates(lat: number, lng: number): Promise<string> {
-    try {
-      // Try TomTom reverse geocoding first
-      if (this.apiKey && this.apiKey !== 'YOUR_TOMTOM_API_KEY_HERE' && this.apiKey.length > 10) {
-        const response = await fetch(
-          `https://api.tomtom.com/search/2/reverseGeocode/${lat},${lng}.json?key=${this.apiKey}`
-        )
-
-        if (response.ok) {
-          const data = await response.json()
-          if (data.addresses && data.addresses.length > 0) {
-            return data.addresses[0].address.freeformAddress
+        if (toDistance < minToDistance) {
+          minToDistance = toDistance
+          closestToStop = {
+            name: stop.name,
+            location: stopLocation
           }
         }
       }
 
-      // Fallback to OpenStreetMap Nominatim
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`
-      )
-
-      if (response.ok) {
-        const data = await response.json()
-        return data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+      // Check if both locations are within max distance of the route
+      if (minFromDistance <= maxDistance && minToDistance <= maxDistance) {
+        matchingRoutes.push({
+          route,
+          fromStop: closestFromStop,
+          toStop: closestToStop,
+          fromDistance: minFromDistance,
+          toDistance: minToDistance
+        })
       }
+    }
 
-      return `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+    // Sort by total distance (from + to)
+    return matchingRoutes.sort((a, b) => 
+      (a.fromDistance + a.toDistance) - (b.fromDistance + b.toDistance)
+    )
+  }
 
+  /**
+   * Calculate estimated fare based on distance
+   */
+  private calculateFare(distanceKm: number): number {
+    // Simple fare calculation: ₹2 per km with minimum ₹5
+    const baseFare = 5
+    const perKmRate = 2
+    return Math.max(baseFare, Math.round(distanceKm * perKmRate))
+  }
+
+  /**
+   * Get address from coordinates
+   */
+  async getAddressFromCoordinates(location: Location): Promise<string> {
+    try {
+      const address = await googleMapsService.reverseGeocode(location)
+      return address || `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`
     } catch (error) {
-      return `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+      console.error('Error getting address from coordinates:', error)
+      return `${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`
     }
   }
 }

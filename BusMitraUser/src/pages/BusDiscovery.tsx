@@ -9,8 +9,18 @@ import { useAutocomplete } from '@/hooks/useAutocomplete'
 import { useBusSearch } from '@/hooks/useBusSearch'
 import MapComponent from '@/components/MapComponent'
 import { AutocompleteInput } from '@/components/AutocompleteInput'
-import { FirebaseStop } from '@/services/firebaseStopsService'
-import { SearchSuggestion } from '@/services/searchService'
+import { searchService } from '@/services/searchService'
+
+// Simple SearchSuggestion interface for location search
+interface SearchSuggestion {
+  id: string
+  address: string
+  name: string
+  coordinates?: {
+    lat: number
+    lng: number
+  }
+}
 
 // Define BusWithDetails interface locally to match actual data structure
 interface BusWithDetails {
@@ -66,7 +76,7 @@ export default function BusDiscovery() {
   const navigate = useNavigate()
   const [fromLocation, setFromLocation] = useState('')
   const [toLocation, setToLocation] = useState('')
-  const [selectedStop, setSelectedStop] = useState<FirebaseStop | null>(null)
+  const [selectedStop, setSelectedStop] = useState<any | null>(null)
   const [showSearchResults, setShowSearchResults] = useState(false)
   const [displayedBuses, setDisplayedBuses] = useState<BusWithDetails[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -115,76 +125,38 @@ export default function BusDiscovery() {
   useEffect(() => {
     if (searchResults && searchResults.length > 0) {
       const checkDriverStatus = async () => {
-        const updatedBuses = await Promise.all(
-          searchResults.map(async (result: any) => {
-            try {
-              const { realtimeLocationService } = await import('@/services/realtimeLocationService')
-              const busNumber = result.route.busId || 'BUS-002'
-              console.log('Checking driver status for bus:', busNumber, 'from result:', result.route)
-              const isDriverOnDuty = await realtimeLocationService.isDriverOnDuty(busNumber)
-              console.log('Driver duty status result:', isDriverOnDuty)
-              
-              return {
-                bus: {
-                  id: result.route.busId || result.route.id,
-                  busNumber,
-                  busName: result.route.routeName,
-                  type: 'Regular',
-                  capacity: 40,
-                  assignedRoute: result.route.id,
-                  status: 'active'
-                },
-                route: {
-                  ...result.route,
-                  driverOnDuty: isDriverOnDuty
-                },
-                fromStop: result.fromBusStand,
-                toStop: result.toBusStand,
-                realtimeStatus: {
-                  busId: result.route.id,
-                  driverId: '',
-                  location: {
-                    lat: result.fromBusStand.coordinates?.lat || 0,
-                    lng: result.fromBusStand.coordinates?.lng || 0,
-                    timestamp: Date.now()
-                  },
-                  status: isDriverOnDuty ? 'in_transit' : 'off_duty',
-                  lastUpdated: Date.now()
-                }
-              }
-            } catch (error) {
-              console.error('Error checking driver status for bus:', result.route.busId, error)
-              return {
-                bus: {
-                  id: result.route.busId || result.route.id,
-                  busNumber: result.route.busId || 'BUS-002',
-                  busName: result.route.routeName,
-                  type: 'Regular',
-                  capacity: 40,
-                  assignedRoute: result.route.id,
-                  status: 'active'
-                },
-                route: {
-                  ...result.route,
-                  driverOnDuty: result.route.driverOnDuty
-                },
-                fromStop: result.fromBusStand,
-                toStop: result.toBusStand,
-                realtimeStatus: {
-                  busId: result.route.id,
-                  driverId: '',
-                  location: {
-                    lat: result.fromBusStand.coordinates?.lat || 0,
-                    lng: result.fromBusStand.coordinates?.lng || 0,
-                    timestamp: Date.now()
-                  },
-                  status: 'in_transit',
-                  lastUpdated: Date.now()
-                }
-              }
+        const updatedBuses = searchResults.map((result: any) => {
+          const busNumber = result.route.busId || 'BUS-002'
+          
+          return {
+            bus: {
+              id: result.route.busId || result.route.id,
+              busNumber,
+              busName: result.route.routeName,
+              type: 'Regular',
+              capacity: 40,
+              assignedRoute: result.route.id,
+              status: 'active'
+            },
+            route: {
+              ...result.route,
+              driverOnDuty: result.route.driverOnDuty || false
+            },
+            fromStop: result.fromBusStand,
+            toStop: result.toBusStand,
+            realtimeStatus: {
+              busId: result.route.id,
+              driverId: '',
+              location: {
+                lat: result.fromBusStand.coordinates?.lat || 0,
+                lng: result.fromBusStand.coordinates?.lng || 0,
+                timestamp: Date.now()
+              },
+              status: 'in_transit',
+              lastUpdated: Date.now()
             }
-          })
-        )
+          }
+        })
         setDisplayedBuses(updatedBuses)
       }
       checkDriverStatus()

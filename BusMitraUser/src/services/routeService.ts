@@ -3,45 +3,81 @@ import { db } from '@/lib/firebase'
 
 export interface RouteStop {
   id: string
-  stopName: string
-  stopCode: string
-  address: string
-  city: string
-  state: string
-  coordinates?: {
-    latitude: number
-    longitude: number
-  }
-  status: 'active' | 'inactive'
+  name: string
+  latitude: number
+  longitude: number
+  sequence: number
 }
 
-export interface RouteDetails {
+export interface Route {
   id: string
-  routeNumber: string
-  routeName: string
-  description: string
-  from: string
-  to: string
-  stops: string[]
-  distance: number
-  estimatedTime: string
-  fare: number
-  status: 'active' | 'inactive'
+  name: string
+  startPoint: string
+  endPoint: string
+  active: boolean
+  distance?: number
+  estimatedTime?: number
+  stops?: RouteStop[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface Bus {
+  id: string
+  busNumber: string
+  licensePlate?: string
+  model?: string
+  manufacturer?: string
+  year?: number
+  capacity?: number
+  status: 'active' | 'maintenance' | 'inactive'
+  assignedRoute?: string
+  driverId?: string
   createdAt?: any
   updatedAt?: any
 }
 
-export interface RouteWithStops extends RouteDetails {
-  fromStop: RouteStop
-  toStop: RouteStop
-  routeStops: RouteStop[]
+export interface Driver {
+  id: string
+  driverId: string
+  name: string
+  phone: string
+  licenseNumber: string
+  status: 'active' | 'inactive'
+  assignedBus?: string
+  createdAt?: any
+  updatedAt?: any
 }
 
 export class RouteService {
   /**
-   * Get route details by ID
+   * Get all active routes
    */
-  async getRouteById(routeId: string): Promise<RouteDetails | null> {
+  async getAllActiveRoutes(): Promise<Route[]> {
+    try {
+      const routesRef = collection(db, 'routes')
+      const q = query(routesRef, where('active', '==', true))
+      const querySnapshot = await getDocs(q)
+      
+      const routes: Route[] = []
+      querySnapshot.forEach((doc) => {
+        routes.push({
+          id: doc.id,
+          ...doc.data()
+        } as Route)
+      })
+      
+      return routes
+    } catch (error) {
+      console.error('Error fetching routes:', error)
+      return []
+    }
+  }
+
+  /**
+   * Get route by ID
+   */
+  async getRouteById(routeId: string): Promise<Route | null> {
     try {
       const routeRef = doc(db, 'routes', routeId)
       const routeSnap = await getDoc(routeRef)
@@ -50,7 +86,7 @@ export class RouteService {
         return {
           id: routeSnap.id,
           ...routeSnap.data()
-        } as RouteDetails
+        } as Route
       }
       
       return null
@@ -61,192 +97,76 @@ export class RouteService {
   }
 
   /**
-   * Get stop details by ID
+   * Get all buses assigned to a specific route
    */
-  async getStopById(stopId: string): Promise<RouteStop | null> {
+  async getBusesByRoute(routeId: string): Promise<Bus[]> {
     try {
-      const stopRef = doc(db, 'stops', stopId)
-      const stopSnap = await getDoc(stopRef)
+      const busesRef = collection(db, 'buses')
+      const q = query(busesRef, where('assignedRoute', '==', routeId), where('status', '==', 'active'))
+      const querySnapshot = await getDocs(q)
       
-      if (stopSnap.exists()) {
-        return {
-          id: stopSnap.id,
-          ...stopSnap.data()
-        } as RouteStop
-      }
-      
-      return null
-    } catch (error) {
-      console.error('Error fetching stop:', error)
-      return null
-    }
-  }
-
-  /**
-   * Get multiple stops by IDs
-   */
-  async getStopsByIds(stopIds: string[]): Promise<RouteStop[]> {
-    try {
-      const stops: RouteStop[] = []
-      
-      // Fetch stops in parallel
-      const stopPromises = stopIds.map(id => this.getStopById(id))
-      const stopResults = await Promise.all(stopPromises)
-      
-      // Filter out null results
-      stopResults.forEach(stop => {
-        if (stop) {
-          stops.push(stop)
-        }
+      const buses: Bus[] = []
+      querySnapshot.forEach((doc) => {
+        buses.push({
+          id: doc.id,
+          ...doc.data()
+        } as Bus)
       })
       
-      return stops
+      return buses
     } catch (error) {
-      console.error('Error fetching stops:', error)
+      console.error('Error fetching buses for route:', error)
       return []
     }
   }
 
   /**
-   * Get route by bus number (legacy method - now returns going route)
+   * Get driver details by ID
    */
-  async getRouteByBusNumber(busNumber: string): Promise<RouteDetails | null> {
+  async getDriverById(driverId: string): Promise<Driver | null> {
     try {
-      // First get the bus to find its route
-      const busesRef = collection(db, 'buses')
-      const busQuery = query(busesRef, where('busNumber', '==', busNumber))
-      const busSnapshot = await getDocs(busQuery)
+      const driverRef = doc(db, 'drivers', driverId)
+      const driverSnap = await getDoc(driverRef)
       
-      if (busSnapshot.empty) {
-        console.log('❌ Bus not found')
-        return null
+      if (driverSnap.exists()) {
+        return {
+          id: driverSnap.id,
+          ...driverSnap.data()
+        } as Driver
       }
       
-      const busData = busSnapshot.docs[0].data()
-      // Try going route first, then fallback to legacy fields
-      const routeId = busData.goingRoute || busData.assignedRoute || busData.routeId
-      
-      if (!routeId) {
-        console.log('❌ No route assigned to bus')
-        return null
-      }
-      
-      return await this.getRouteById(routeId)
+      return null
     } catch (error) {
-      console.error('Error fetching route by bus number:', error)
+      console.error('Error fetching driver:', error)
       return null
     }
   }
 
   /**
-   * Get both routes for a bus (going and coming)
+   * Get all stops from all active routes
    */
-  async getBusRoutes(busNumber: string): Promise<{
-    goingRoute: RouteDetails | null;
-    comingRoute: RouteDetails | null;
-  }> {
+  async getAllStopsFromRoutes(): Promise<RouteStop[]> {
     try {
-      // First get the bus to find its routes
-      const busesRef = collection(db, 'buses')
-      const busQuery = query(busesRef, where('busNumber', '==', busNumber))
-      const busSnapshot = await getDocs(busQuery)
+      const routes = await this.getAllActiveRoutes()
+      const allStops: RouteStop[] = []
+      const stopMap = new Map<string, RouteStop>()
       
-      if (busSnapshot.empty) {
-        console.log('❌ Bus not found')
-        return { goingRoute: null, comingRoute: null }
-      }
-      
-      const busData = busSnapshot.docs[0].data()
-      
-      // Get both routes
-      let goingRoute = null
-      let comingRoute = null
-      
-      if (busData.goingRoute) {
-        goingRoute = await this.getRouteById(busData.goingRoute)
-        console.log('🟢 Going route found:', goingRoute?.routeName)
-      }
-      
-      if (busData.comingRoute) {
-        comingRoute = await this.getRouteById(busData.comingRoute)
-        console.log('🔵 Coming route found:', comingRoute?.routeName)
-      }
-      
-      return { goingRoute, comingRoute }
-    } catch (error) {
-      console.error('Error fetching bus routes:', error)
-      return { goingRoute: null, comingRoute: null }
-    }
-  }
-
-  /**
-   * Get complete route details with all stops
-   */
-  async getRouteWithStops(busNumber: string): Promise<RouteWithStops | null> {
-    try {
-      console.log('🔍 Fetching route details for bus:', busNumber)
-      
-      // Get route details by bus number
-      const route = await this.getRouteByBusNumber(busNumber)
-      if (!route) {
-        console.log('❌ Route not found')
-        return null
-      }
-      
-      console.log('📊 Route found:', route.routeName)
-      
-      // Get from and to stops
-      const fromStop = await this.getStopById(route.from)
-      const toStop = await this.getStopById(route.to)
-      
-      if (!fromStop || !toStop) {
-        console.log('❌ From or To stop not found')
-        return null
-      }
-      
-      console.log('📍 From stop:', fromStop.stopName)
-      console.log('📍 To stop:', toStop.stopName)
-      
-      // Get all route stops
-      const routeStops = await this.getStopsByIds(route.stops)
-      console.log('🚏 Route stops found:', routeStops.length)
-      
-      return {
-        ...route,
-        fromStop,
-        toStop,
-        routeStops
-      }
-    } catch (error) {
-      console.error('Error fetching route with stops:', error)
-      return null
-    }
-  }
-
-  /**
-   * Get all active routes
-   */
-  async getAllActiveRoutes(): Promise<RouteDetails[]> {
-    try {
-      const routesRef = collection(db, 'routes')
-      const q = query(routesRef, where('status', '==', 'active'))
-      const querySnapshot = await getDocs(q)
-      
-      const routes: RouteDetails[] = []
-      querySnapshot.forEach((doc) => {
-        routes.push({
-          id: doc.id,
-          ...doc.data()
-        } as RouteDetails)
+      routes.forEach(route => {
+        if (route.stops && Array.isArray(route.stops)) {
+          route.stops.forEach(stop => {
+            if (typeof stop === 'object' && stop.id) {
+              stopMap.set(stop.id, stop)
+            }
+          })
+        }
       })
       
-      return routes
+      return Array.from(stopMap.values())
     } catch (error) {
-      console.error('Error fetching routes:', error)
+      console.error('Error fetching stops from routes:', error)
       return []
     }
   }
 }
 
 export const routeService = new RouteService()
-

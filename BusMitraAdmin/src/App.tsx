@@ -9,10 +9,9 @@ import NotFound from "./pages/NotFound";
 import AdminLayout from "./components/AdminLayout";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Dashboard from "./pages/admin/Dashboard";
+import RoutesPage from "./pages/admin/Routes";
 import Buses from "./pages/admin/Buses";
 import Drivers from "./pages/admin/Drivers";
-import Stops from "./pages/admin/Stops";
-import RoutesPage from "./pages/admin/Routes";
 
 const queryClient = new QueryClient();
 
@@ -47,10 +46,9 @@ function AppRoutes() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="routes" element={<RoutesPage />} />
         <Route path="buses" element={<Buses />} />
         <Route path="drivers" element={<Drivers />} />
-        <Route path="stops" element={<Stops />} />
-        <Route path="routes" element={<RoutesPage />} />
       </Route>
       {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
       <Route path="*" element={<NotFound />} />

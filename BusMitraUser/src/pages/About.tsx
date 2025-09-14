@@ -22,7 +22,7 @@ function About() {
               Our Story
             </h2>
             <p className="text-gray-600 text-sm sm:text-base leading-relaxed">
-              BusMitra was founded in 2023 with a vision to revolutionize public transportation in India. Born out of the need for real-time bus tracking and smarter commuting solutions, we’ve grown into a platform trusted by millions. Our journey began with a small team passionate about leveraging technology to reduce commute stress and enhance urban mobility.
+              BusMitra was created in 2025 by our team Ctrl Alt Defeat at SRMIST. Seeing commuters in small cities struggle with unreliable buses, we built a software only, real-time tracking solution that reduces waiting time, helps authorities plan better, and restores trust in public transport.
             </p>
           </div>
           <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
@@ -30,7 +30,7 @@ function About() {
               Our Mission
             </h2>
             <p className="text-gray-600 text-sm sm:text-base leading-relaxed">
-              At BusMitra, our mission is to empower commuters with accurate, real-time information and innovative tools. We aim to save time, reduce waiting, and promote sustainable travel by connecting people with reliable bus services across cities.
+              At BusMitra, our mission is to provide commuters with simple, reliable, and real-time travel information. We strive to cut down waiting, improve daily journeys, and encourage sustainable mobility by making public bus services smarter, accessible, and trustworthy across cities.
             </p>
           </div>
         </div>

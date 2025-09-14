@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Outlet, NavLink, useLocation } from "react-router-dom";
 import { 
-  Bus, 
+  Bus,
   Route, 
   Users, 
   LayoutDashboard, 
@@ -17,10 +17,9 @@ import { useAuth } from "@/hooks/useAuth";
 
 const navigation = [
   { name: "Dashboard", href: "/admin", icon: LayoutDashboard },
+  { name: "Routes", href: "/admin/routes", icon: Route },
   { name: "Buses", href: "/admin/buses", icon: Bus },
   { name: "Drivers", href: "/admin/drivers", icon: Users },
-  { name: "Stops", href: "/admin/stops", icon: MapPin },
-  { name: "Routes", href: "/admin/routes", icon: Route },
 ];
 
 export default function AdminLayout() {

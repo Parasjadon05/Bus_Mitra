@@ -23,42 +23,32 @@ export interface Bus {
   manufacturer: string;
   year: number;
   status: 'active' | 'maintenance' | 'inactive';
+  assignedRoute?: string; // Route ID that this bus is assigned to
   driverId?: string;
-  routeId?: string;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-}
-
-export interface Stop {
-  id?: string;
-  stopName: string; // e.g., "ISBT Anand Vihar", "Central Railway Station"
-  stopCode: string; // e.g., "ISBT-AV", "CRS-001"
-  address: string; // Full address
-  city: string; // City name
-  state: string; // State name
-  coordinates?: {
-    latitude: number;
-    longitude: number;
-  };
-  status: 'active' | 'inactive';
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
 
 export interface Route {
   id?: string;
-  routeNumber: string; // e.g., "R001", "BUS-101"
-  routeName: string; // e.g., "City Center Express"
-  description: string;
-  from: string; // Start stop ID
-  to: string; // End stop ID
-  stops: string[]; // Array of stop IDs
-  distance: number; // in kilometers
-  estimatedTime: string; // e.g., "30-45 min"
-  fare: number;
-  status: 'active' | 'inactive';
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
+  name: string; // e.g., "Route 102: Broadway to Thiruvanmiyur"
+  startPoint: string; // e.g., "Broadway Bus Terminus"
+  endPoint: string; // e.g., "Thiruvanmiyur"
+  active: boolean; // true/false
+  distance?: number; // in kilometers
+  estimatedTime?: number; // in minutes
+  stops?: Array<{
+    id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    sequence: number;
+  }>;
+  createdAt?: string;
+  updatedAt?: string;
+  // Optional fields for admin panel
+  routeNumber?: string; // Will be extracted from name
+  description?: string;
 }
 
 export interface Driver {
@@ -142,7 +132,6 @@ class FirebaseService<T> {
 
 // Specific services
 export const busService = new FirebaseService<Bus>('buses');
-export const stopService = new FirebaseService<Stop>('stops');
 export const routeService = new FirebaseService<Route>('routes');
 export const driverService = new FirebaseService<Driver>('drivers');
 

@@ -3,10 +3,8 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { ArrowLeft, Bus, MapPin, Clock, Navigation, Gauge, Users, Loader2, Wifi, WifiOff } from 'lucide-react'
-import { routeService, RouteWithStops, RouteDetails, RouteStop } from '@/services/routeService'
-import { realtimeLocationService, BusStatus } from '@/services/realtimeLocationService'
-import { busService, BusWithDriver } from '@/services/busService'
+import { ArrowLeft, Bus as BusIcon, MapPin, Clock, Navigation, Gauge, Users, Loader2, Wifi, WifiOff } from 'lucide-react'
+import { routeService, Route, Bus, Driver } from '@/services/routeService'
 import MapComponent from '@/components/MapComponent'
 import RouteTracker from '@/components/RouteTracker'
 import { detectBusDirection, getRouteByDirection, Direction } from '@/utils/directionUtils'
@@ -17,16 +15,11 @@ export default function BusDetails() {
   const location = useLocation()
   const [currentSpeed, setCurrentSpeed] = useState(35)
   const [eta, setEta] = useState('5 min')
-  const [routeData, setRouteData] = useState<RouteWithStops | null>(null)
-  const [firebaseBusData, setFirebaseBusData] = useState<BusWithDriver | null>(null)
-  const [goingRoute, setGoingRoute] = useState<RouteDetails | null>(null)
-  const [comingRoute, setComingRoute] = useState<RouteDetails | null>(null)
-  const [goingStops, setGoingStops] = useState<RouteStop[]>([])
-  const [comingStops, setComingStops] = useState<RouteStop[]>([])
-  const [currentDirection, setCurrentDirection] = useState<Direction>('going')
+  const [routeData, setRouteData] = useState<Route | null>(null)
+  const [busData, setBusData] = useState<Bus | null>(null)
+  const [driverData, setDriverData] = useState<Driver | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busStatus, setBusStatus] = useState<BusStatus | null>(null)
   const [isConnected, setIsConnected] = useState(true)
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null)
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null)
@@ -56,96 +49,51 @@ export default function BusDetails() {
         setIsLoading(true)
         setError(null)
         
-        // If we have busWithDetails from navigation state, use it instead of fetching
-        if (busWithDetails) {
-          console.log('✅ Using busWithDetails from navigation state')
-          // Convert busWithDetails to routeData format
-          const routeData = {
-            id: busWithDetails.route.id,
-            routeNumber: busWithDetails.route.routeNumber,
-            routeName: busWithDetails.route.routeName,
-            description: busWithDetails.route.routeName,
-            from: busWithDetails.route.from,
-            to: busWithDetails.route.to,
-            stops: busWithDetails.route.stops,
-            distance: busWithDetails.route.totalDistance || 0,
-            estimatedTime: busWithDetails.route.estimatedTime || '30-45 min',
-            fare: busWithDetails.route.fare,
-            status: 'active' as const,
-            fromStop: {
-              id: busWithDetails.route.from,
-              stopName: busWithDetails.fromStop.name,
-              stopCode: '',
-              address: '',
-              city: '',
-              state: '',
-              coordinates: busWithDetails.fromStop.coordinates,
-              status: 'active' as const
-            },
-            toStop: {
-              id: busWithDetails.route.to,
-              stopName: busWithDetails.toStop.name,
-              stopCode: '',
-              address: '',
-              city: '',
-              state: '',
-              coordinates: busWithDetails.toStop.coordinates,
-              status: 'active' as const
-            },
-            routeStops: [] // We'll populate this if needed
-          }
-          setRouteData(routeData)
-          console.log('✅ Route data created from busWithDetails:', routeData)
-        } else {
-          // Fetch both routes for the bus
-          const { goingRoute, comingRoute } = await routeService.getBusRoutes(busNumber)
-          setGoingRoute(goingRoute)
-          setComingRoute(comingRoute)
-
-          if (goingRoute) {
-            console.log('✅ Going route loaded:', goingRoute.routeName)
-            // Get going route stops
-            const goingRouteWithStops = await routeService.getRouteWithStops(busNumber)
-            if (goingRouteWithStops) {
-              setGoingStops([goingRouteWithStops.fromStop, ...goingRouteWithStops.routeStops, goingRouteWithStops.toStop])
-              setRouteData(goingRouteWithStops) // Keep for backward compatibility
-            }
-          }
-
-          if (comingRoute) {
-            console.log('✅ Coming route loaded:', comingRoute.routeName)
-            // Get coming route stops
-            const comingRouteWithStops = await routeService.getRouteWithStops(comingRoute.id!)
-            if (comingRouteWithStops) {
-              setComingStops([comingRouteWithStops.fromStop, ...comingRouteWithStops.routeStops, comingRouteWithStops.toStop])
-            }
-          }
-
-          if (!goingRoute && !comingRoute) {
-            setError('No routes found for this bus')
-          }
-        }
+        console.log('🔍 Fetching data for bus:', busNumber)
         
-        // Fetch bus data (this might not be needed if we have busWithDetails)
-        if (!busWithDetails) {
-          const bus = await busService.getBusWithDriver(busNumber)
-          if (bus) {
-            setFirebaseBusData(bus)
-            console.log('✅ Bus data loaded:', bus)
-          } else {
-            console.log('⚠️ Bus data not found, using fallback')
+        // Get all routes and find the one that matches this bus
+        const routes = await routeService.getAllActiveRoutes()
+        const matchingRoute = routes.find(route => 
+          route.name.includes(busNumber) || 
+          route.id === busNumber
+        )
+        
+        if (!matchingRoute) {
+          setError('Route not found for this bus')
+          setIsLoading(false)
+          return
+        }
+
+        console.log('📊 Route found:', matchingRoute)
+        setRouteData(matchingRoute)
+
+        // Get buses assigned to this route
+        const buses = await routeService.getBusesByRoute(matchingRoute.id)
+        const bus = buses.find(b => b.busNumber === busNumber) || buses[0]
+        
+        if (bus) {
+          console.log('🚌 Bus found:', bus)
+          setBusData(bus)
+          
+          // Get driver if assigned
+          if (bus.driverId) {
+            const driver = await routeService.getDriverById(bus.driverId)
+            if (driver) {
+              setDriverData(driver)
+            }
           }
         }
-      } catch (err) {
-        console.error('Error fetching data:', err)
-        setError('Failed to load data')
+
+      } catch (error) {
+        console.error('Error fetching data:', error)
+        setError('Failed to load bus details')
       } finally {
         setIsLoading(false)
       }
     }
 
     fetchData()
-  }, [busNumber, busWithDetails])
+  }, [busNumber])
 
   // Get user's current location (optional - only if user explicitly allows)
   useEffect(() => {
@@ -158,65 +106,24 @@ export default function BusDetails() {
   useEffect(() => {
     if (!busNumber) return
 
-    // For now, we'll use the route ID as the bus identifier
-    // In a real system, we'd need to find the actual bus assigned to this route
-    const busIdentifier = busWithDetails?.bus?.busNumber || busNumber
-
-    // Start listening to bus location updates
-    const unsubscribeLocation = realtimeLocationService.startListeningToBus(
-      busIdentifier,
-      (status: BusStatus) => {
-        console.log('📍 Real-time bus update:', status)
-        console.log('📍 Driver location coordinates:', status.location.lat, status.location.lng)
-        setBusStatus(status)
-        setLastUpdateTime(new Date())
-        
-        // Update speed if available
-        if (status.location.speed) {
-          setCurrentSpeed(Math.round(status.location.speed * 3.6)) // Convert m/s to km/h
-        }
-        
-        // Update ETA if available
-        if (status.estimatedArrival) {
-          setEta(status.estimatedArrival)
-        }
-
-        // Detect direction based on bus position
-        if (status.location && goingRoute && comingRoute && goingStops.length > 0 && comingStops.length > 0) {
-          const detectedDirection = detectBusDirection(
-            status.location.lat,
-            status.location.lng,
-            goingRoute,
-            comingRoute,
-            goingStops,
-            comingStops
-          )
-          setCurrentDirection(detectedDirection)
-          console.log('🧭 Direction detected:', detectedDirection)
-        }
-      }
-    )
-
-    // Listen to connection status
-    const unsubscribeConnection = realtimeLocationService.listenToConnectionStatus(
-      (connected: boolean) => {
-        console.log('🌐 Connection status:', connected ? 'Connected' : 'Disconnected')
-        setIsConnected(connected)
-      }
-    )
-
+    console.log('🚌 Setting up tracking for bus:', busNumber)
+    
+    // For now, we'll use mock data until real-time tracking is implemented
+    // In the future, this will connect to Firebase Realtime Database or WebSocket
+    
+    // Simulate connection status
+    setIsConnected(true)
+    
     // Cleanup on unmount
     return () => {
-      console.log('🧹 Cleaning up real-time listeners')
-      unsubscribeLocation()
-      unsubscribeConnection()
+      console.log('🧹 Cleaning up tracking listeners')
     }
   }, [busNumber])
 
   // Use real data if available, otherwise fallback to mock data
   
   // Create stops from real route data if available
-  const createStopsFromRouteData = (routeData: RouteWithStops) => {
+  const createStopsFromRouteData = (routeData: Route) => {
     
     const stops = []
     const addedStopIds = new Set<string>()
@@ -277,7 +184,7 @@ export default function BusDetails() {
 
   const currentRouteData = getCurrentRouteData()
 
-  const busData = currentRouteData && firebaseBusData ? {
+  const computedBusData = currentRouteData && firebaseBusData ? {
     id: busNumber,
     busNumber: firebaseBusData.licensePlate,
     route: `${currentRouteData.fromStop.stopName} → ${currentRouteData.toStop.stopName}`,
@@ -432,7 +339,7 @@ export default function BusDetails() {
             </Button>
             <div>
               <h1 className="text-xl font-semibold text-gray-900">Bus details and journey details</h1>
-              <p className="text-sm text-gray-600">{busData.busNumber} - {busData.route}</p>
+              <p className="text-sm text-gray-600">{computedBusData.busNumber} - {computedBusData.route}</p>
             </div>
           </div>
         </div>
@@ -451,7 +358,7 @@ export default function BusDetails() {
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
               <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Bus className="h-8 w-8 text-red-600" />
+                <BusIcon className="h-8 w-8 text-red-600" />
               </div>
               <p className="text-lg font-medium text-gray-900">Error Loading Route</p>
               <p className="text-sm text-gray-600 mb-4">{error}</p>
@@ -469,19 +376,19 @@ export default function BusDetails() {
                 <CardTitle className="flex items-center gap-2">
                   <Navigation className="h-5 w-5" />
                   Route of selected bus from start to end
-                  {busData?.direction && (
-                    <Badge variant={busData.direction === 'going' ? 'default' : 'secondary'} className="ml-2">
-                      {busData.direction === 'going' ? '🟢 Going' : '🔵 Coming'}
+                  {computedBusData?.direction && (
+                    <Badge variant={computedBusData.direction === 'going' ? 'default' : 'secondary'} className="ml-2">
+                      {computedBusData.direction === 'going' ? '🟢 Going' : '🔵 Coming'}
                     </Badge>
                   )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <RouteTracker 
-                  stops={busData.stops}
-                  currentStop={busData.nextStop}
-                  nextStop={busData.stops.find(s => s.status === 'upcoming')?.name}
-                  estimatedArrival={busData.estimatedTime}
+                  stops={computedBusData.stops}
+                  currentStop={computedBusData.nextStop}
+                  nextStop={computedBusData.stops.find(s => s.status === 'upcoming')?.name}
+                  estimatedArrival={computedBusData.estimatedTime}
                 />
               </CardContent>
             </Card>
@@ -579,7 +486,7 @@ export default function BusDetails() {
                     <span className="text-sm text-blue-600">
                       {busStatus?.location ? 
                         `${busStatus.location.lat.toFixed(6)}, ${busStatus.location.lng.toFixed(6)}` : 
-                        busData.currentLocation
+                        computedBusData.currentLocation
                       }
                     </span>
                   </div>

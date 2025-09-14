@@ -1,5 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { searchService, SearchSuggestion } from '@/services/searchService'
+import { firebaseStopsService, FirebaseStop } from '@/services/firebaseStopsService'
+
+// SearchSuggestion interface for location search
+interface SearchSuggestion {
+  id: string
+  address: string
+  name: string
+  coordinates?: {
+    lat: number
+    lng: number
+  }
+}
 
 export function useAutocomplete() {
   const [query, setQuery] = useState('')
@@ -41,7 +52,20 @@ export function useAutocomplete() {
     console.log('useAutocomplete: Starting search...')
     
     try {
-      const results = await searchService.searchAddresses(searchQuery, 5)
+      // Search stops from Firebase routes
+      const firebaseStops = await firebaseStopsService.searchStops(searchQuery, 5)
+      
+      // Convert FirebaseStop to SearchSuggestion
+      const results: SearchSuggestion[] = firebaseStops.map(stop => ({
+        id: stop.id,
+        address: stop.address,
+        name: stop.name,
+        coordinates: stop.coordinates.lat !== 0 && stop.coordinates.lng !== 0 ? {
+          lat: stop.coordinates.lat,
+          lng: stop.coordinates.lng
+        } : undefined
+      }))
+      
       console.log('useAutocomplete: Got results:', results.length, results)
       setSuggestions(results)
       setIsOpen(results.length > 0)

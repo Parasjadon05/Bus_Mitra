@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { busSearchService, BusSearchResult, BusSearchParams } from '@/services/busSearchService'
+import { searchService, BusSearchResult, BusSearchParams } from '@/services/searchService'
 
 export function useBusSearch() {
   const [searchResults, setSearchResults] = useState<BusSearchResult[]>([])
@@ -13,7 +13,7 @@ export function useBusSearch() {
     setLastSearchParams(params)
 
     try {
-      const results = await busSearchService.searchBuses(params)
+      const results = await searchService.searchBuses(params)
       setSearchResults(results)
       
       if (results.length === 0) {
