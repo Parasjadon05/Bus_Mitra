@@ -19,6 +19,6 @@ const app = initializeApp(firebaseConfig)
 export const db = getFirestore(app)
 export const auth = getAuth(app)
 export const googleProvider = new GoogleAuthProvider()
-export const realtimeDb = getDatabase(app, 'https://busmitra-paras05-default-rtdb.asia-southeast1.firebasedatabase.app')
+export const database = getDatabase(app, 'https://busmitra-paras05-default-rtdb.asia-southeast1.firebasedatabase.app')
 
 export default app

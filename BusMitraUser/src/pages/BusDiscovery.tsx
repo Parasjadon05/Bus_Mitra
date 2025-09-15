@@ -1,28 +1,17 @@
-import { useState, useEffect } from 'react'
+
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ArrowLeft, MapPin, Clock, Bus, Navigation, AlertCircle, RefreshCw, IndianRupee, Wifi, WifiOff } from 'lucide-react'
-import { useFirebaseStops } from '@/hooks/useFirebaseStops'
-import { useAutocomplete } from '@/hooks/useAutocomplete'
-import { useBusSearch } from '@/hooks/useBusSearch'
-import MapComponent from '@/components/MapComponent'
-import { AutocompleteInput } from '@/components/AutocompleteInput'
-import { searchService } from '@/services/searchService'
+import { GoogleMap, LoadScript, Marker, DirectionsRenderer } from '@react-google-maps/api'
+import { firebaseStopsService } from '@/services/firebaseStopsService'
+import { routeService } from '@/services/routeService'
+import type { FirebaseStop } from '@/services/firebaseStopsService'
+import type { Route, Bus as RouteBus } from '@/services/routeService'
 
-// Simple SearchSuggestion interface for location search
-interface SearchSuggestion {
-  id: string
-  address: string
-  name: string
-  coordinates?: {
-    lat: number
-    lng: number
-  }
-}
-
-// Define BusWithDetails interface locally to match actual data structure
+// Define BusWithDetails interface
 interface BusWithDetails {
   bus: {
     id: string
@@ -72,166 +61,362 @@ interface BusWithDetails {
   }
 }
 
+// Google Maps configuration
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+const mapContainerStyle = {
+  width: '100%',
+  height: '400px'
+}
+const defaultCenter = { lat: 12.8249, lng: 80.0461 } // Andaman and Nicobar Islands
+
 export default function BusDiscovery() {
   const navigate = useNavigate()
   const [fromLocation, setFromLocation] = useState('')
   const [toLocation, setToLocation] = useState('')
-  const [selectedStop, setSelectedStop] = useState<any | null>(null)
+  const [fromQuery, setFromQuery] = useState('')
+  const [toQuery, setToQuery] = useState('')
+  const [fromSuggestions, setFromSuggestions] = useState<FirebaseStop[]>([])
+  const [toSuggestions, setToSuggestions] = useState<FirebaseStop[]>([])
+  const [showFromDropdown, setShowFromDropdown] = useState(false)
+  const [showToDropdown, setShowToDropdown] = useState(false)
+  const [selectedStop, setSelectedStop] = useState<FirebaseStop | null>(null)
   const [showSearchResults, setShowSearchResults] = useState(false)
   const [displayedBuses, setDisplayedBuses] = useState<BusWithDetails[]>([])
   const [isSearching, setIsSearching] = useState(false)
-  
-  const {
-    userLocation,
-    userAddress,
-    nearbyStops,
-    isLoading,
-    error,
-    getCurrentLocation,
-    clearError
-  } = useFirebaseStops()
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null)
+  const [fromCoordinates, setFromCoordinates] = useState<{ lat: number; lng: number } | null>(null)
+  const [toCoordinates, setToCoordinates] = useState<{ lat: number; lng: number } | null>(null)
+  const [routeDistance, setRouteDistance] = useState<string>('')
+  const [routeDuration, setRouteDuration] = useState<string>('')
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [userAddress, setUserAddress] = useState<string>('')
+  const [nearbyStops, setNearbyStops] = useState<FirebaseStop[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isMapLoaded, setIsMapLoaded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [mapLoadKey, setMapLoadKey] = useState(Date.now())
 
-  const {
-    query: fromQuery,
-    suggestions: fromSuggestions,
-    isLoading: isFromSearching,
-    isOpen: isFromDropdownOpen,
-    selectedIndex: fromSelectedIndex,
-    handleInputChange: handleFromInputChange,
-    handleSuggestionSelect: handleFromSuggestionSelect,
-    handleKeyDown: handleFromKeyDown,
-    closeDropdown: closeFromDropdown
-  } = useAutocomplete()
-
-  const {
-    query: toQuery,
-    suggestions: toSuggestions,
-    isLoading: isToSearching,
-    isOpen: isToDropdownOpen,
-    selectedIndex: toSelectedIndex,
-    handleInputChange: handleToInputChange,
-    handleSuggestionSelect: handleToSuggestionSelect,
-    handleKeyDown: handleToKeyDown,
-    closeDropdown: closeToDropdown
-  } = useAutocomplete()
-
-  const {
-    searchResults,
-    isSearching: isBusSearching,
-    searchBuses,
-    retrySearch
-  } = useBusSearch()
-
+  // Prevent multiple Google Maps script loads
   useEffect(() => {
-    if (searchResults && searchResults.length > 0) {
-      const checkDriverStatus = async () => {
-        const updatedBuses = searchResults.map((result: any) => {
-          const busNumber = result.route.busId || 'BUS-002'
-          
-          return {
-            bus: {
-              id: result.route.busId || result.route.id,
-              busNumber,
-              busName: result.route.routeName,
-              type: 'Regular',
-              capacity: 40,
-              assignedRoute: result.route.id,
-              status: 'active'
-            },
-            route: {
-              ...result.route,
-              driverOnDuty: result.route.driverOnDuty || false
-            },
-            fromStop: result.fromBusStand,
-            toStop: result.toBusStand,
-            realtimeStatus: {
-              busId: result.route.id,
-              driverId: '',
-              location: {
-                lat: result.fromBusStand.coordinates?.lat || 0,
-                lng: result.fromBusStand.coordinates?.lng || 0,
-                timestamp: Date.now()
-              },
-              status: 'in_transit',
-              lastUpdated: Date.now()
+    const existingScripts = document.querySelectorAll('script[src*="maps.googleapis.com"]')
+    existingScripts.forEach(script => script.remove())
+  }, [])
+
+  // Function to calculate directions using Google Maps Directions API
+  const calculateRoute = useCallback((origin: google.maps.LatLngLiteral, destination: google.maps.LatLngLiteral) => {
+    if (!isMapLoaded || !window.google?.maps) {
+      setError('Google Maps API not loaded. Please try again.')
+      return
+    }
+    try {
+      const directionsService = new window.google.maps.DirectionsService()
+      directionsService.route(
+        {
+          origin,
+          destination,
+          travelMode: google.maps.TravelMode.WALKING,
+        },
+        (result, status) => {
+          if (status === 'OK' && result) {
+            setDirections(result)
+            if (result.routes[0]?.legs[0]) {
+              setRouteDistance(result.routes[0].legs[0].distance?.text || 'N/A')
+              setRouteDuration(result.routes[0].legs[0].duration?.text || 'N/A')
             }
+          } else {
+            setError(`Failed to calculate route: ${status}`)
+          }
+        }
+      )
+    } catch (err) {
+      setError('Failed to calculate route. Please try again.')
+    }
+  }, [isMapLoaded])
+
+  // Load initial location
+  useEffect(() => {
+    const loadLocation = async () => {
+      try {
+        setIsLoading(true)
+        setError(null)
+        const location = await firebaseStopsService.getCurrentLocation()
+        const userLoc = { lat: location.latitude, lng: location.longitude }
+        setUserLocation(userLoc)
+        const address = await firebaseStopsService.getAddressFromCoordinates(location.latitude, location.longitude)
+        setUserAddress(address)
+        const nearestStops = await firebaseStopsService.getNearbyStopsFromDB(location, 50000)
+        setNearbyStops(nearestStops)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load location')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    loadLocation()
+  }, [])
+
+  // Ensure map operations are delayed until API is fully loaded
+  useEffect(() => {
+    if (isMapLoaded && userLocation && fromCoordinates && window.google?.maps) {
+      const timer = setTimeout(() => {
+        calculateRoute(userLocation, fromCoordinates)
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [isMapLoaded, userLocation, fromCoordinates, calculateRoute])
+
+  // Fallback for user location
+  useEffect(() => {
+    if (!userLocation) {
+      const timer = setTimeout(() => {
+        if (!userLocation) {
+          setUserLocation(defaultCenter)
+          setUserAddress('Default Location (Andaman and Nicobar Islands)')
+        }
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [userLocation])
+
+  // Check geolocation permissions
+  useEffect(() => {
+    navigator.permissions?.query({ name: 'geolocation' }).then(result => {
+      if (result.state === 'denied') {
+        setError('Location access denied. Please enable location permissions.')
+      }
+    })
+  }, [])
+
+  // Fetch all stops for suggestions
+  const fetchStopSuggestions = async (query: string, setSuggestions: (suggestions: FirebaseStop[]) => void) => {
+    if (query.length < 2) {
+      setSuggestions([])
+      return
+    }
+    try {
+      const routes = await routeService.getAllRoutes()
+      const allStops: FirebaseStop[] = []
+      routes.forEach(route => {
+        route.stops.forEach(stop => {
+          if (
+            !allStops.some(s => s.id === stop.id) &&
+            (stop.name.toLowerCase().includes(query.toLowerCase()) ||
+             stop.address?.toLowerCase().includes(query.toLowerCase()))
+          ) {
+            allStops.push({
+              id: stop.id,
+              name: stop.name,
+              address: stop.address || '',
+              coordinates: { lat: stop.latitude, lng: stop.longitude },
+              routeId: route.id,
+              sequence: stop.sequence,
+              distance: 0
+            })
           }
         })
-        setDisplayedBuses(updatedBuses)
+      })
+      setSuggestions(allStops)
+    } catch (err) {
+      setError('Failed to fetch stop suggestions')
+    }
+  }
+
+  // Handle from input change and suggestions
+  const handleFromInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setFromQuery(value)
+    setFromLocation(value)
+    await fetchStopSuggestions(value, setFromSuggestions)
+    setShowFromDropdown(value.length >= 2 && fromSuggestions.length > 0)
+  }
+
+  // Handle to input change and suggestions
+  const handleToInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setToQuery(value)
+    setToLocation(value)
+    await fetchStopSuggestions(value, setToSuggestions)
+    setShowToDropdown(value.length >= 2 && toSuggestions.length > 0)
+  }
+
+  // Handle from suggestion select
+  const handleFromSuggestionSelect = (suggestion: FirebaseStop) => {
+    setFromQuery(suggestion.name)
+    setFromLocation(suggestion.name)
+    setShowFromDropdown(false)
+    if (suggestion.coordinates && suggestion.coordinates.lat !== 0 && suggestion.coordinates.lng !== 0) {
+      const coords = { lat: suggestion.coordinates.lat, lng: suggestion.coordinates.lng }
+      setFromCoordinates(coords)
+      if (userLocation && isMapLoaded && window.google?.maps) {
+        calculateRoute(userLocation, coords)
       }
-      checkDriverStatus()
     }
-  }, [searchResults])
-
-  useEffect(() => {
-    if (userAddress && !fromLocation && !fromQuery) {
-      setFromLocation(userAddress)
-      handleFromInputChange(userAddress)
-    }
-  }, [userAddress])
-
-  useEffect(() => {
-    if (fromQuery !== fromLocation) {
-      setFromLocation(fromQuery)
-    }
-  }, [fromQuery, fromLocation])
-
-  useEffect(() => {
-    if (toQuery !== toLocation) {
-      setToLocation(toQuery)
-    }
-  }, [toQuery, toLocation])
-
-  const handleFromSelect = (suggestion: SearchSuggestion) => {
-    handleFromSuggestionSelect(suggestion)
-    setFromLocation(suggestion.address)
   }
 
-  const handleToSelect = (suggestion: SearchSuggestion) => {
-    handleToSuggestionSelect(suggestion)
-    setToLocation(suggestion.address)
+  // Handle to suggestion select
+  const handleToSuggestionSelect = (suggestion: FirebaseStop) => {
+    setToQuery(suggestion.name)
+    setToLocation(suggestion.name)
+    setShowToDropdown(false)
+    if (suggestion.coordinates && suggestion.coordinates.lat !== 0 && suggestion.coordinates.lng !== 0) {
+      setToCoordinates({ lat: suggestion.coordinates.lat, lng: suggestion.coordinates.lng })
+    }
   }
 
+  // Handle find buses
   const handleFindBuses = async () => {
     if (!fromLocation.trim() || !toLocation.trim()) {
-      alert('Please enter both from and to locations')
+      setError('Please enter both from and to locations')
       return
     }
     try {
       setIsSearching(true)
       setShowSearchResults(true)
-      await searchBuses({
-        fromLocation: fromLocation.trim(),
-        toLocation: toLocation.trim(),
-        maxDistance: 5
+      setError(null)
+
+      // Fetch all routes from Firebase
+      const routes = await routeService.getAllRoutes()
+      const matchedRoutes: Route[] = []
+
+      // Find routes that include both from and to stops
+      routes.forEach(route => {
+        const fromStop = route.stops.find(
+          stop => stop.name.toLowerCase() === fromLocation.trim().toLowerCase()
+        )
+        const toStop = route.stops.find(
+          stop => stop.name.toLowerCase() === toLocation.trim().toLowerCase()
+        )
+
+        if (fromStop && toStop && fromStop.sequence <= toStop.sequence) {
+          matchedRoutes.push(route)
+        }
       })
+
+      // Fetch buses assigned to matched routes
+      const busDetailsPromises = matchedRoutes.map(async (route) => {
+        const buses = await routeService.getBusesByAssignedRoute(route.id)
+        return buses.map(async (bus) => {
+          const fromStop = route.stops.find(
+            stop => stop.name.toLowerCase() === fromLocation.trim().toLowerCase()
+          )!
+          const toStop = route.stops.find(
+            stop => stop.name.toLowerCase() === toLocation.trim().toLowerCase()
+          )!
+          const driver = bus.driverId ? await routeService.getDriverById(bus.driverId) : undefined
+
+          return {
+            bus: {
+              id: bus.id,
+              busNumber: bus.busNumber,
+              busName: bus.busName || route.name,
+              type: bus.type || 'Regular',
+              capacity: bus.capacity || 40,
+              assignedRoute: route.id,
+              status: bus.status || 'active'
+            },
+            route: {
+              id: route.id,
+              routeNumber: route.id,
+              routeName: route.name,
+              from: fromStop.name,
+              to: toStop.name,
+              stops: route.stops.map(s => s.name),
+              fare: route.fare || 0,
+              totalDistance: route.distance || 0,
+              estimatedTime: route.estimatedTime?.toString() || 'N/A',
+              driverOnDuty: bus.driverId ? true : false,
+              driverId: bus.driverId
+            },
+            fromStop: {
+              name: fromStop.name,
+              distance: fromStop.distance || 0
+            },
+            toStop: {
+              name: toStop.name,
+              distance: toStop.distance || 0
+            },
+            realtimeStatus: {
+              busId: bus.id,
+              driverId: bus.driverId || '',
+              location: {
+                lat: fromStop.latitude || userLocation?.lat || defaultCenter.lat,
+                lng: fromStop.longitude || userLocation?.lng || defaultCenter.lng,
+                timestamp: Date.now()
+              },
+              status: bus.status || 'in_transit',
+              lastUpdated: Date.now()
+            },
+            driver
+          } as BusWithDetails
+        })
+      })
+
+      // Flatten and resolve all bus details
+      const busDetailsArrays = await Promise.all(busDetailsPromises)
+      const busDetails = (await Promise.all(busDetailsArrays.flat())).filter((bus): bus is BusWithDetails => bus !== undefined)
+      setDisplayedBuses(busDetails)
       setIsSearching(false)
     } catch (error) {
-      console.error('Error searching buses:', error)
       setDisplayedBuses([])
       setIsSearching(false)
+      setError('Failed to find buses')
     }
   }
 
   const handleGetCurrentLocation = async () => {
     try {
-      await getCurrentLocation()
+      setIsLoading(true)
+      setError(null)
+      const location = await firebaseStopsService.getCurrentLocation()
+      const userLoc = { lat: location.latitude, lng: location.longitude }
+      setUserLocation(userLoc)
+      const address = await firebaseStopsService.getAddressFromCoordinates(location.latitude, location.longitude)
+      setUserAddress(address)
+      const nearestStops = await firebaseStopsService.getNearbyStopsFromDB(location, 50000)
+      setNearbyStops(nearestStops)
     } catch (error) {
-      console.error('Error getting current location:', error)
-      alert(`Failed to get location: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      setError(error instanceof Error ? error.message : 'Unknown error')
+    } finally {
+      setIsLoading(false)
     }
   }
 
   const handleRealBusSelect = (busWithDetails: BusWithDetails) => {
-    navigate(`/bus/${busWithDetails.route.id}`, {
+    navigate(`/bus/${busWithDetails.bus.id}`, {
       state: { busWithDetails, fromLocation, toLocation }
     })
   }
 
   const handleRefreshLocation = () => {
-    clearError()
-    getCurrentLocation()
+    setError(null)
+    handleGetCurrentLocation()
   }
+
+  const retrySearch = () => handleFindBuses()
+
+  const retryMapLoad = () => {
+    setIsMapLoaded(false)
+    setMapLoadKey(Date.now())
+    setError(null)
+  }
+
+  // Monitor network status
+  useEffect(() => {
+    const handleOnlineStatus = () => {
+      if (!navigator.onLine) {
+        setError('No internet connection. Please check your network.')
+      } else if (error === 'No internet connection. Please check your network.') {
+        setError(null)
+        retryMapLoad()
+      }
+    }
+    window.addEventListener('online', handleOnlineStatus)
+    window.addEventListener('offline', handleOnlineStatus)
+    return () => {
+      window.removeEventListener('online', handleOnlineStatus)
+      window.removeEventListener('offline', handleOnlineStatus)
+    }
+  }, [error])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
@@ -264,46 +449,60 @@ export default function BusDiscovery() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6 space-y-5">
-                <div className="flex flex-col sm:flex-row items-center gap-4">
+                <div className="flex flex-col sm:flex-row items-center gap-4 relative">
                   <div className="w-full sm:w-1/2">
-                    <AutocompleteInput
-                      placeholder="From"
+                    <input
+                      placeholder="From (e.g., Koyambedu)"
                       value={fromQuery}
                       onChange={handleFromInputChange}
-                      onSelect={handleFromSelect}
-                      suggestions={fromSuggestions}
-                      isLoading={isFromSearching}
-                      isOpen={isFromDropdownOpen}
-                      selectedIndex={fromSelectedIndex}
-                      onKeyDown={handleFromKeyDown}
-                      onClose={closeFromDropdown}
+                      onFocus={() => fromQuery.length >= 2 && setShowFromDropdown(true)}
                       className="w-full border border-gray-200 rounded-lg p-3 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-[#87281B]/40 transition-all duration-200"
                     />
+                    {showFromDropdown && fromSuggestions.length > 0 && (
+                      <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg mt-1 max-h-40 overflow-auto shadow-lg">
+                        {fromSuggestions.map((suggestion) => (
+                          <li
+                            key={suggestion.id}
+                            className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                            onClick={() => handleFromSuggestionSelect(suggestion)}
+                          >
+                            {suggestion.name}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                   <span className="hidden sm:block text-lg font-medium text-gray-600">to</span>
-                  <div className="w-full sm:w-1/2">
-                    <AutocompleteInput
-                      placeholder="To"
+                  <div className="w-full sm:w-1/2 relative">
+                    <input
+                      placeholder="To (e.g., Kelambakkam)"
                       value={toQuery}
                       onChange={handleToInputChange}
-                      onSelect={handleToSelect}
-                      suggestions={toSuggestions}
-                      isLoading={isToSearching}
-                      isOpen={isToDropdownOpen}
-                      selectedIndex={toSelectedIndex}
-                      onKeyDown={handleToKeyDown}
-                      onClose={closeToDropdown}
+                      onFocus={() => toQuery.length >= 2 && setShowToDropdown(true)}
                       className="w-full border border-gray-200 rounded-lg p-3 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-[#87281B]/40 transition-all duration-200"
                     />
+                    {showToDropdown && toSuggestions.length > 0 && (
+                      <ul className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg mt-1 max-h-40 overflow-auto shadow-lg">
+                        {toSuggestions.map((suggestion) => (
+                          <li
+                            key={suggestion.id}
+                            className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                            onClick={() => handleToSuggestionSelect(suggestion)}
+                          >
+                            {suggestion.name}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-4">
                   <Button 
                     className="w-full bg-gradient-to-r from-[#87281B] to-[#601c13] text-white py-3 rounded-xl text-lg font-medium shadow-md hover:shadow-lg transition-all duration-300 disabled:opacity-70"
                     onClick={handleFindBuses}
-                    disabled={!fromLocation.trim() || !toLocation.trim() || isBusSearching}
+                    disabled={!fromLocation.trim() || !toLocation.trim() || isSearching}
                   >
-                    {isBusSearching ? (
+                    {isSearching ? (
                       <>
                         <RefreshCw className="h-5 w-5 mr-2 animate-spin" />
                         Searching...
@@ -331,10 +530,16 @@ export default function BusDiscovery() {
                     )}
                   </Button>
                 </div>
+                {error && (
+                  <div className="text-red-600 text-sm flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4" />
+                    {error}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
-            {/* Map Section */}
+            {/* Map Section with Google Maps */}
             <Card className="bg-white rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 border border-gray-100/50">
               <CardHeader className="border-b border-gray-100/70 p-6">
                 <div className="flex items-center justify-between">
@@ -355,11 +560,27 @@ export default function BusDiscovery() {
                 </div>
               </CardHeader>
               <CardContent className="p-6">
-                {error ? (
+                {!GOOGLE_MAPS_API_KEY || GOOGLE_MAPS_API_KEY === 'YOUR_API_KEY_HERE' ? (
                   <div className="h-64 bg-red-50/80 rounded-xl flex items-center justify-center">
                     <div className="text-center text-red-600">
                       <AlertCircle className="h-12 w-12 mx-auto mb-2" />
-                      <p className="font-medium text-lg">Location Error</p>
+                      <p className="font-medium text-lg">Invalid Google Maps API Key</p>
+                      <p className="text-sm text-red-500">Please configure VITE_GOOGLE_MAPS_API_KEY in .env</p>
+                    </div>
+                  </div>
+                ) : isLoading && !userLocation ? (
+                  <div className="h-64 bg-gray-100/80 rounded-xl flex items-center justify-center">
+                    <div className="text-center text-gray-600">
+                      <RefreshCw className="h-12 w-12 mx-auto mb-2 animate-spin" />
+                      <p className="font-medium text-lg">Getting your location...</p>
+                      <p className="text-sm">Please allow location access</p>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="h-64 bg-red-50/80 rounded-xl flex items-center justify-center">
+                    <div className="text-center text-red-600">
+                      <AlertCircle className="h-12 w-12 mx-auto mb-2" />
+                      <p className="font-medium text-lg">Error</p>
                       <p className="text-sm text-red-500">{error}</p>
                       <Button
                         variant="outline"
@@ -371,53 +592,102 @@ export default function BusDiscovery() {
                       </Button>
                     </div>
                   </div>
-                ) : isLoading && !userLocation ? (
-                  <div className="h-64 bg-gray-100/80 rounded-xl flex items-center justify-center">
-                    <div className="text-center text-gray-600">
-                      <RefreshCw className="h-12 w-12 mx-auto mb-2 animate-spin" />
-                      <p className="font-medium text-lg">Getting your location...</p>
-                      <p className="text-sm">Please allow location access</p>
-                    </div>
-                  </div>
                 ) : (
-                  <MapComponent
-                    userLocation={userLocation}
-                    userAddress={userAddress}
-                    busStands={nearbyStops.map(stop => ({
-                      id: stop.id,
-                      name: stop.stopName,
-                      address: stop.address,
-                      coordinates: [stop.coordinates?.longitude || 0, stop.coordinates?.latitude || 0] as [number, number],
-                      distance: stop.distance || 0,
-                      type: 'bus_stop' as const
-                    }))}
-                    onBusStandSelect={(busStand) => {
-                      const stop = nearbyStops.find(s => s.id === busStand.id)
-                      if (stop) setSelectedStop(stop)
+                  <LoadScript
+                    key={mapLoadKey}
+                    googleMapsApiKey={GOOGLE_MAPS_API_KEY}
+                    onLoad={() => setIsMapLoaded(true)}
+                    onError={() => {
+                      setError('Failed to load Google Maps. Please check your API key or network.')
+                      setIsMapLoaded(false)
+                      setMapLoadKey(Date.now())
                     }}
-                    selectedBusStand={selectedStop ? {
-                      id: selectedStop.id,
-                      name: selectedStop.stopName,
-                      address: selectedStop.address,
-                      coordinates: [selectedStop.coordinates?.longitude || 0, selectedStop.coordinates?.latitude || 0] as [number, number],
-                      distance: selectedStop.distance || 0,
-                      type: 'bus_stop' as const
-                    } : null}
-                    className="h-64 rounded-xl"
-                  />
+                    loadingElement={
+                      <div className="h-64 bg-gray-100/80 rounded-xl flex items-center justify-center">
+                        <div className="text-center text-gray-600">
+                          <RefreshCw className="h-12 w-12 mx-auto mb-2 animate-spin" />
+                          <p className="font-medium text-lg">Loading Google Maps...</p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={retryMapLoad}
+                            className="mt-2 border-[#87281B] text-[#87281B] hover:bg-[#87281B]/5"
+                          >
+                            Retry Load
+                          </Button>
+                        </div>
+                      </div>
+                    }
+                  >
+                    {isMapLoaded && window.google?.maps && (
+                      <GoogleMap
+                        mapContainerStyle={mapContainerStyle}
+                        center={userLocation || defaultCenter}
+                        zoom={15}
+                        options={{
+                          mapTypeControl: false,
+                          streetViewControl: false,
+                          fullscreenControl: false,
+                        }}
+                      >
+                        {directions && <DirectionsRenderer directions={directions} />}
+                        {userLocation && (
+                          <Marker
+                            position={userLocation}
+                            icon={{
+                              url: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+                              scaledSize: new window.google.maps.Size(32, 32),
+                            }}
+                            title="Your Current Location"
+                          />
+                        )}
+                        {fromCoordinates && fromCoordinates.lat !== 0 && fromCoordinates.lng !== 0 && (
+                          <Marker
+                            position={fromCoordinates}
+                            icon={{
+                              url: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
+                              scaledSize: new window.google.maps.Size(32, 32),
+                            }}
+                            title="From Stop"
+                          />
+                        )}
+                        {nearbyStops.map((stop) => (
+                          stop.coordinates.lat !== 0 && stop.coordinates.lng !== 0 && (
+                            <Marker
+                              key={stop.id}
+                              position={stop.coordinates}
+                              icon={{
+                                url: 'https://maps.google.com/mapfiles/ms/icons/green-dot.png',
+                                scaledSize: new window.google.maps.Size(32, 32),
+                              }}
+                              title={stop.name}
+                            />
+                          )
+                        ))}
+                      </GoogleMap>
+                    )}
+                  </LoadScript>
                 )}
                 {userLocation && (
                   <div className="mt-5 space-y-3">
                     <div className="h-12 bg-gray-50/80 rounded-xl flex items-center px-4 shadow-sm">
                       <span className="text-sm sm:text-base text-gray-700">
-                        Current Location: {userAddress || `${userLocation.latitude.toFixed(4)}, ${userLocation.longitude.toFixed(4)}`}
+                        Current Location: {userAddress}
                       </span>
                     </div>
+                    {fromCoordinates && routeDistance && (
+                      <div className="h-12 bg-blue-50/80 rounded-xl flex items-center px-4 shadow-sm">
+                        <span className="text-sm sm:text-base text-blue-700">
+                          <Navigation className="h-4 w-4 inline mr-1" />
+                          Route to From Stop: {routeDistance} ({routeDuration})
+                        </span>
+                      </div>
+                    )}
                     {nearbyStops.length > 0 && (
                       <>
                         <div className="h-12 bg-[#87281B]/10 rounded-xl flex items-center px-4 shadow-sm">
                           <span className="text-sm sm:text-base text-[#87281B]">
-                            Nearest Stop: {nearbyStops[0].stopName} ({Math.round(nearbyStops[0].distance || 0)}m)
+                            Nearest Stop: {nearbyStops[0].name} ({Math.round(nearbyStops[0].distance || 0)}m)
                           </span>
                         </div>
                         <div className="h-12 bg-green-50/80 rounded-xl flex items-center px-4 shadow-sm">
@@ -438,7 +708,7 @@ export default function BusDiscovery() {
                 <CardContent className="p-4 flex items-center gap-2 text-[#87281B]">
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   <span className="text-sm font-medium">Loading Real Data</span>
-                  <span className="text-xs text-[#87281B]/70">Searching for bus stops...</span>
+                  <span className="text-xs text-[#87281B]/70">From Firebase</span>
                 </CardContent>
               </Card>
             )}
@@ -448,7 +718,7 @@ export default function BusDiscovery() {
                 <CardContent className="p-4 flex items-center gap-2 text-green-800">
                   <MapPin className="h-4 w-4" />
                   <span className="text-sm font-medium">Firebase Database</span>
-                  <span className="text-xs text-green-600">Verified stops from admin</span>
+                  <span className="text-xs text-green-600">Real stops from routes</span>
                 </CardContent>
               </Card>
             )}
@@ -477,20 +747,29 @@ export default function BusDiscovery() {
                             ? 'border-[#87281B] bg-[#87281B]/5 shadow-md'
                             : 'border-gray-200 hover:border-[#87281B]/40 hover:shadow-sm'
                         }`}
-                        onClick={() => setSelectedStop(stop)}
+                        onClick={() => {
+                          setSelectedStop(stop)
+                          const coords = { lat: stop.coordinates.lat, lng: stop.coordinates.lng }
+                          setFromCoordinates(coords)
+                          setFromLocation(stop.name)
+                          setFromQuery(stop.name)
+                          if (userLocation && isMapLoaded && window.google?.maps) {
+                            calculateRoute(userLocation, coords)
+                          }
+                        }}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
-                            <h4 className="font-semibold text-base sm:text-lg text-gray-900">{stop.stopName}</h4>
+                            <h4 className="font-semibold text-base sm:text-lg text-gray-900">{stop.name}</h4>
                             <p className="text-xs sm:text-sm text-gray-500 mt-1">{stop.address}</p>
-                            <p className="text-xs sm:text-sm text-gray-500">{stop.city}, {stop.state}</p>
+                            {stop.routeId && <p className="text-xs text-gray-500">Route: {stop.routeId}</p>}
                           </div>
                           <div className="text-right">
                             <p className="text-xs sm:text-sm font-medium text-gray-700">
                               {stop.distance ? `${(stop.distance / 1000).toFixed(1)} km` : 'N/A'}
                             </p>
                             <Badge variant="secondary" className="text-xs sm:text-sm mt-1 bg-gray-100 text-gray-800">
-                              {stop.stopCode}
+                              {stop.sequence || 'N/A'}
                             </Badge>
                           </div>
                         </div>
@@ -498,9 +777,10 @@ export default function BusDiscovery() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm sm:text-base text-gray-500 text-center py-6">
-                    No nearby bus stops found. Add stops in the admin panel.
-                  </p>
+                  <div className="text-center py-6">
+                    <p className="text-sm sm:text-base text-gray-500">No nearby bus stops found.</p>
+                    <p className="text-xs text-gray-400">Please check Firebase data or increase search radius.</p>
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -525,7 +805,7 @@ export default function BusDiscovery() {
                       <div className="space-y-3">
                         <h3 className="text-xl sm:text-2xl font-semibold text-gray-900">Find Your Perfect Bus</h3>
                         <p className="text-gray-600 text-sm sm:text-base max-w-md">
-                          Enter your destinations above and click "Find Buses" to explore real-time routes.
+                          Enter your destinations above and click "Find Buses" to explore real-time routes from Firebase.
                         </p>
                       </div>
                       <div className="flex items-center gap-2 text-sm sm:text-base text-gray-500">
@@ -535,12 +815,12 @@ export default function BusDiscovery() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {isSearching || isBusSearching ? (
+                      {isSearching ? (
                         <div className="h-full flex items-center justify-center">
                           <div className="text-center space-y-4">
                             <RefreshCw className="h-10 w-10 mx-auto animate-spin text-[#87281B]" />
                             <p className="text-gray-700 font-medium text-lg sm:text-xl">Searching for buses...</p>
-                            <p className="text-sm sm:text-base text-gray-500">Finding routes between your locations</p>
+                            <p className="text-sm sm:text-base text-gray-500">Querying Firebase routes</p>
                           </div>
                         </div>
                       ) : displayedBuses.length > 0 ? (
@@ -563,24 +843,27 @@ export default function BusDiscovery() {
                                   </div>
                                   <div>
                                     <h3 className="font-semibold text-lg sm:text-xl text-gray-900">{busWithDetails.bus.busNumber}</h3>
-                                    <p className="text-sm sm:text-base text-gray-600">{busWithDetails.route?.routeName || busWithDetails.bus.busName}</p>
+                                    <p className="text-sm sm:text-base text-gray-600">{busWithDetails.route.routeName}</p>
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-3 flex-shrink-0">
-                                  {busWithDetails.realtimeStatus?.status === 'off_duty' && (
+                                  {busWithDetails.realtimeStatus.status === 'off_duty' && (
                                     <Badge variant="secondary" className="bg-gray-100 text-gray-800 text-xs sm:text-sm py-1 px-2">
                                       <Clock className="h-3 w-3 mr-1" />
                                       Off Duty
                                     </Badge>
                                   )}
-                                  <Badge variant={
-                                    busWithDetails.realtimeStatus?.status === 'in_transit' ? 'default' :
-                                    busWithDetails.realtimeStatus?.status === 'at_stop' ? 'secondary' :
-                                    busWithDetails.realtimeStatus?.status === 'delayed' ? 'destructive' : 'outline'
-                                  } className="text-xs sm:text-sm py-1 px-2">
-                                    {busWithDetails.realtimeStatus?.status === 'in_transit' ? 'In Transit' :
-                                     busWithDetails.realtimeStatus?.status === 'at_stop' ? 'At Stop' :
-                                     busWithDetails.realtimeStatus?.status === 'delayed' ? 'Delayed' : 'Off Duty'}
+                                  <Badge
+                                    variant={
+                                      busWithDetails.realtimeStatus.status === 'in_transit' ? 'default' :
+                                      busWithDetails.realtimeStatus.status === 'at_stop' ? 'secondary' :
+                                      busWithDetails.realtimeStatus.status === 'delayed' ? 'destructive' : 'outline'
+                                    }
+                                    className="text-xs sm:text-sm py-1 px-2"
+                                  >
+                                    {busWithDetails.realtimeStatus.status === 'in_transit' ? 'In Transit' :
+                                     busWithDetails.realtimeStatus.status === 'at_stop' ? 'At Stop' :
+                                     busWithDetails.realtimeStatus.status === 'delayed' ? 'Delayed' : 'Off Duty'}
                                   </Badge>
                                   {busWithDetails.realtimeStatus && (
                                     <div className="flex items-center gap-1">
@@ -597,22 +880,22 @@ export default function BusDiscovery() {
                                 <div className="grid grid-cols-2 gap-4 text-sm sm:text-base text-gray-700">
                                   <div className="flex items-center gap-2">
                                     <Clock className="h-4 w-4" />
-                                    <span>ETA: {busWithDetails.route?.estimatedTime || 'N/A'}</span>
+                                    <span>ETA: {busWithDetails.route.estimatedTime}</span>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <IndianRupee className="h-4 w-4" />
-                                    <span>₹{busWithDetails.route?.fare || 'N/A'}</span>
+                                    <span>₹{busWithDetails.route.fare}</span>
                                   </div>
                                 </div>
                                 <div className="mt-4 flex items-center justify-between text-sm sm:text-base">
                                   <span className="text-gray-600">
-                                    From: {busWithDetails.fromStop?.name || 'N/A'}
+                                    From: {busWithDetails.fromStop.name} to {busWithDetails.toStop.name}
                                   </span>
                                   <Button size="sm" variant="outline" className="border-[#87281B] text-[#87281B] hover:bg-[#87281B]/5">
                                     View Details
                                   </Button>
                                 </div>
-                                {busWithDetails.route?.driverId && (
+                                {busWithDetails.route.driverId && (
                                   <div className="mt-2 text-xs sm:text-sm text-gray-500">
                                     Driver ID: {busWithDetails.route.driverId}
                                   </div>
@@ -628,7 +911,7 @@ export default function BusDiscovery() {
                             <div className="space-y-2">
                               <h3 className="text-lg sm:text-xl font-medium text-gray-900">No Buses Found</h3>
                               <p className="text-gray-600 text-sm sm:text-base">
-                                No buses available for these locations.
+                                No buses available for these locations in Firebase.
                               </p>
                             </div>
                             <Button onClick={retrySearch} variant="outline" size="sm" className="border-[#87281B] text-[#87281B] hover:bg-[#87281B]/5">

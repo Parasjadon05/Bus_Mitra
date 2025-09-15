@@ -1,3 +1,4 @@
+
 import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 
@@ -17,6 +18,7 @@ export interface FirebaseStop {
   }
   routeId?: string
   sequence?: number
+  distance?: number
 }
 
 export const firebaseStopsService = {
@@ -48,67 +50,65 @@ export const firebaseStopsService = {
     })
   },
 
-  // Convert coordinates to address using Nominatim (free service)
+  // Convert coordinates to address using Google Maps Geocoding API
   async getAddressFromCoordinates(lat: number, lng: number): Promise<string> {
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}`
       )
-      
       if (!response.ok) {
-        throw new Error('Failed to fetch address')
+        throw new Error('Failed to fetch address from Google Maps API')
       }
-      
       const data = await response.json()
-      return data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+      if (data.status === 'OK' && data.results[0]) {
+        return data.results[0].formatted_address
+      }
+      return `${lat.toFixed(6)}, ${lng.toFixed(6)}`
     } catch (error) {
-      console.error('Error getting address from coordinates:', error)
       return `${lat.toFixed(6)}, ${lng.toFixed(6)}`
     }
   },
 
-  // Search for stops by name/address in routes
-  async searchStops(searchQuery: string, limit: number = 10): Promise<FirebaseStop[]> {
+  // Search for stops by name/address in Firebase database
+  async getStopsFromDB(searchQuery: string, limit: number = 10): Promise<FirebaseStop[]> {
     try {
-      console.log('🔍 Searching stops in routes for:', searchQuery)
-      
-      // Get all routes from Firebase
       const routesRef = collection(db, 'routes')
       const routesSnapshot = await getDocs(routesRef)
       
       const allStops: FirebaseStop[] = []
-      const stopMap = new Map<string, FirebaseStop>() // To avoid duplicates
+      const stopMap = new Map<string, FirebaseStop>()
       
       routesSnapshot.forEach((routeDoc) => {
         const routeData = routeDoc.data()
         
-        // Add start point
         if (routeData.startPoint) {
           const startStop: FirebaseStop = {
             id: `${routeDoc.id}-start`,
             name: routeData.startPoint,
             address: routeData.startPoint,
-            coordinates: { lat: 0, lng: 0 }, // Will be filled from stops array if available
+            coordinates: { lat: routeData.startLat || 0, lng: routeData.startLng || 0 },
             routeId: routeDoc.id,
             sequence: 0
           }
-          stopMap.set(startStop.name.toLowerCase(), startStop)
+          if (startStop.coordinates.lat !== 0 && startStop.coordinates.lng !== 0) {
+            stopMap.set(startStop.name.toLowerCase(), startStop)
+          }
         }
         
-        // Add end point
         if (routeData.endPoint) {
           const endStop: FirebaseStop = {
             id: `${routeDoc.id}-end`,
             name: routeData.endPoint,
             address: routeData.endPoint,
-            coordinates: { lat: 0, lng: 0 }, // Will be filled from stops array if available
+            coordinates: { lat: routeData.endLat || 0, lng: routeData.endLng || 0 },
             routeId: routeDoc.id,
             sequence: 999
           }
-          stopMap.set(endStop.name.toLowerCase(), endStop)
+          if (endStop.coordinates.lat !== 0 && endStop.coordinates.lng !== 0) {
+            stopMap.set(endStop.name.toLowerCase(), endStop)
+          }
         }
         
-        // Add stops from the stops array
         if (routeData.stops && Array.isArray(routeData.stops)) {
           routeData.stops.forEach((stop: any, index: number) => {
             const routeStop: FirebaseStop = {
@@ -122,21 +122,20 @@ export const firebaseStopsService = {
               routeId: routeDoc.id,
               sequence: stop.sequence || index + 1
             }
-            stopMap.set(routeStop.name.toLowerCase(), routeStop)
+            if (routeStop.coordinates.lat !== 0 && routeStop.coordinates.lng !== 0) {
+              stopMap.set(routeStop.name.toLowerCase(), routeStop)
+            }
           })
         }
       })
       
-      // Convert map to array
       const allStopsArray = Array.from(stopMap.values())
       
-      // Filter stops based on search query
       const filteredStops = allStopsArray.filter(stop => 
         stop.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         stop.address.toLowerCase().includes(searchQuery.toLowerCase())
       )
       
-      // Sort by relevance (exact matches first, then partial matches)
       const sortedStops = filteredStops.sort((a, b) => {
         const aExact = a.name.toLowerCase() === searchQuery.toLowerCase()
         const bExact = b.name.toLowerCase() === searchQuery.toLowerCase()
@@ -147,29 +146,29 @@ export const firebaseStopsService = {
         return a.name.localeCompare(b.name)
       })
       
-      console.log(`✅ Found ${sortedStops.length} stops matching "${searchQuery}"`)
       return sortedStops.slice(0, limit)
       
     } catch (error) {
-      console.error('Error searching stops:', error)
       return []
     }
   },
 
-  // Find nearest stops from user location (simplified version)
-  async findNearestStops(userLocation: UserLocation, radiusInMeters: number = 5000): Promise<FirebaseStop[]> {
+  // Find nearest stops from user location in Firebase database
+  async getNearbyStopsFromDB(userLocation: UserLocation, radiusInMeters: number = 50000): Promise<FirebaseStop[]> {
     try {
-      console.log('📍 Finding nearest stops to:', userLocation)
+      const allStops = await this.getStopsFromDB('', 100)
       
-      // Get all stops first
-      const allStops = await this.searchStops('', 100) // Get more stops for distance calculation
-      
-      // Filter stops that have coordinates
       const stopsWithCoords = allStops.filter(stop => 
-        stop.coordinates.lat !== 0 && stop.coordinates.lng !== 0
+        stop.coordinates.lat !== 0 && 
+        stop.coordinates.lng !== 0 && 
+        !isNaN(stop.coordinates.lat) && 
+        !isNaN(stop.coordinates.lng)
       )
       
-      // Calculate distances and filter by radius
+      if (stopsWithCoords.length === 0) {
+        return []
+      }
+      
       const nearbyStops = stopsWithCoords
         .map(stop => ({
           ...stop,
@@ -184,11 +183,9 @@ export const firebaseStopsService = {
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 10)
       
-      console.log(`✅ Found ${nearbyStops.length} nearby stops`)
       return nearbyStops
       
     } catch (error) {
-      console.error('Error finding nearest stops:', error)
       return []
     }
   },
