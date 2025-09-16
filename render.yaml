@@ -1,0 +1,50 @@
+# Render blueprint to deploy the User app as a Static Site
+# Docs: https://render.com/docs/infrastructure-as-code
+
+services:
+  - type: static_site
+    name: busmitra-user
+    env: static
+    # Build the Vite app inside BusMitraUser
+    buildCommand: npm ci && npm run build
+    buildFilter:
+      paths:
+        - BusMitraUser/**
+    publishPath: BusMitraUser/dist
+    rootDir: BusMitraUser
+    pullRequestPreviewsEnabled: true
+    headers:
+      - path: /
+        name: Cache-Control
+        value: no-cache
+    routes:
+      # SPA fallback so client routing works
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    # Environment variables required by the user app
+    envVars:
+      # Google Maps
+      - key: VITE_GOOGLE_MAPS_API_KEY
+        value: "REPLACE_WITH_YOUR_KEY"
+
+      # Firebase Web App Config
+      - key: VITE_FIREBASE_API_KEY
+        value: "REPLACE"
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        value: "REPLACE"
+      - key: VITE_FIREBASE_PROJECT_ID
+        value: "REPLACE"
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        value: "REPLACE"
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        value: "REPLACE"
+      - key: VITE_FIREBASE_APP_ID
+        value: "REPLACE"
+      - key: VITE_FIREBASE_MEASUREMENT_ID
+        value: ""
+
+      # If the user app directly reads Realtime Database
+      - key: VITE_FIREBASE_DATABASE_URL
+        value: ""
