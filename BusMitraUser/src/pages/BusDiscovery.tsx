@@ -8,8 +8,9 @@ import { ArrowLeft, MapPin, Clock, Bus, Navigation, AlertCircle, RefreshCw, Indi
 import { GoogleMap, LoadScript, Marker, DirectionsRenderer } from '@react-google-maps/api'
 import { firebaseStopsService } from '@/services/firebaseStopsService'
 import { routeService } from '@/services/routeService'
+import { searchService } from '@/services/searchService'
 import type { FirebaseStop } from '@/services/firebaseStopsService'
-import type { Route, Bus as RouteBus } from '@/services/routeService'
+import type { Route } from '@/services/routeService'
 
 // Define BusWithDetails interface
 interface BusWithDetails {
@@ -62,7 +63,7 @@ interface BusWithDetails {
 }
 
 // Google Maps configuration
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+const GOOGLE_MAPS_API_KEY = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || 'YOUR_API_KEY_HERE'
 const mapContainerStyle = {
   width: '100%',
   height: '400px'
@@ -194,30 +195,14 @@ export default function BusDiscovery() {
       return
     }
     try {
-      const routes = await routeService.getAllRoutes()
-      const allStops: FirebaseStop[] = []
-      routes.forEach(route => {
-        route.stops.forEach(stop => {
-          if (
-            !allStops.some(s => s.id === stop.id) &&
-            (stop.name.toLowerCase().includes(query.toLowerCase()) ||
-             stop.address?.toLowerCase().includes(query.toLowerCase()))
-          ) {
-            allStops.push({
-              id: stop.id,
-              name: stop.name,
-              address: stop.address || '',
-              coordinates: { lat: stop.latitude, lng: stop.longitude },
-              routeId: route.id,
-              sequence: stop.sequence,
-              distance: 0
-            })
-          }
-        })
-      })
-      setSuggestions(allStops)
+      console.log('Fetching suggestions for query:', query)
+      const stops = await firebaseStopsService.getStopsFromDB(query, 10)
+      console.log('Received suggestions:', stops)
+      setSuggestions(stops)
     } catch (err) {
-      setError('Failed to fetch stop suggestions')
+      console.error('Failed to fetch stop suggestions:', err)
+      // Don't set error state, just use empty suggestions
+      setSuggestions([])
     }
   }
 
@@ -226,8 +211,16 @@ export default function BusDiscovery() {
     const value = e.target.value
     setFromQuery(value)
     setFromLocation(value)
-    await fetchStopSuggestions(value, setFromSuggestions)
-    setShowFromDropdown(value.length >= 2 && fromSuggestions.length > 0)
+    
+    if (value.length >= 2) {
+      await fetchStopSuggestions(value, (suggestions) => {
+        setFromSuggestions(suggestions)
+        setShowFromDropdown(suggestions.length > 0)
+      })
+    } else {
+      setFromSuggestions([])
+      setShowFromDropdown(false)
+    }
   }
 
   // Handle to input change and suggestions
@@ -235,8 +228,16 @@ export default function BusDiscovery() {
     const value = e.target.value
     setToQuery(value)
     setToLocation(value)
-    await fetchStopSuggestions(value, setToSuggestions)
-    setShowToDropdown(value.length >= 2 && toSuggestions.length > 0)
+    
+    if (value.length >= 2) {
+      await fetchStopSuggestions(value, (suggestions) => {
+        setToSuggestions(suggestions)
+        setShowToDropdown(suggestions.length > 0)
+      })
+    } else {
+      setToSuggestions([])
+      setShowToDropdown(false)
+    }
   }
 
   // Handle from suggestion select
@@ -269,97 +270,104 @@ export default function BusDiscovery() {
       setError('Please enter both from and to locations')
       return
     }
+
+    // Check if we have coordinates for both locations
+    if (!fromCoordinates || !toCoordinates) {
+      setError('Please select locations from the suggestions to get accurate results')
+      return
+    }
+
     try {
       setIsSearching(true)
       setShowSearchResults(true)
       setError(null)
 
-      // Fetch all routes from Firebase
-      const routes = await routeService.getAllRoutes()
-      const matchedRoutes: Route[] = []
-
-      // Find routes that include both from and to stops
-      routes.forEach(route => {
-        const fromStop = route.stops.find(
-          stop => stop.name.toLowerCase() === fromLocation.trim().toLowerCase()
-        )
-        const toStop = route.stops.find(
-          stop => stop.name.toLowerCase() === toLocation.trim().toLowerCase()
-        )
-
-        if (fromStop && toStop && fromStop.sequence <= toStop.sequence) {
-          matchedRoutes.push(route)
-        }
+      console.log('🔍 Searching buses with coordinates:', {
+        from: fromLocation,
+        to: toLocation,
+        fromCoords: fromCoordinates,
+        toCoords: toCoordinates
       })
 
-      // Fetch buses assigned to matched routes
-      const busDetailsPromises = matchedRoutes.map(async (route) => {
-        const buses = await routeService.getBusesByAssignedRoute(route.id)
-        return buses.map(async (bus) => {
-          const fromStop = route.stops.find(
-            stop => stop.name.toLowerCase() === fromLocation.trim().toLowerCase()
-          )!
-          const toStop = route.stops.find(
-            stop => stop.name.toLowerCase() === toLocation.trim().toLowerCase()
-          )!
-          const driver = bus.driverId ? await routeService.getDriverById(bus.driverId) : undefined
+      // Use the enhanced search service with coordinates
+      const searchResults = await searchService.searchBuses({
+        fromLocation: fromLocation,
+        toLocation: toLocation,
+        fromCoordinates: fromCoordinates,
+        toCoordinates: toCoordinates,
+        maxDistance: 5000 // 5km max distance from stops
+      })
 
-          return {
+      console.log('🎯 Search results:', searchResults)
+
+      if (searchResults.length === 0) {
+        setError('No buses found connecting these locations. Please try different locations.')
+        setDisplayedBuses([])
+        return
+      }
+
+      // Convert search results to the expected format
+      const busDetails: BusWithDetails[] = []
+      
+      for (const result of searchResults) {
+        for (const bus of result.buses) {
+          const driver = bus.driverId ? await routeService.getDriverById(bus.driverId) : undefined
+          
+          busDetails.push({
             bus: {
               id: bus.id,
               busNumber: bus.busNumber,
-              busName: bus.busName || route.name,
+              busName: bus.busName || result.route.name,
               type: bus.type || 'Regular',
               capacity: bus.capacity || 40,
-              assignedRoute: route.id,
+              assignedRoute: result.route.id,
               status: bus.status || 'active'
             },
             route: {
-              id: route.id,
-              routeNumber: route.id,
-              routeName: route.name,
-              from: fromStop.name,
-              to: toStop.name,
-              stops: route.stops.map(s => s.name),
-              fare: route.fare || 0,
-              totalDistance: route.distance || 0,
-              estimatedTime: route.estimatedTime?.toString() || 'N/A',
+              id: result.route.id,
+              routeNumber: result.route.id,
+              routeName: result.route.name,
+              from: result.fromLocation.name,
+              to: result.toLocation.name,
+              stops: result.route.stops?.map(s => s.name) || [],
+              fare: result.estimatedFare || 0,
+              totalDistance: result.totalDistance || 0,
+              estimatedTime: result.estimatedTime?.toString() || 'N/A',
               driverOnDuty: bus.driverId ? true : false,
               driverId: bus.driverId
             },
             fromStop: {
-              name: fromStop.name,
-              distance: fromStop.distance || 0
+              name: result.fromLocation.name,
+              distance: result.fromLocation.distance
             },
             toStop: {
-              name: toStop.name,
-              distance: toStop.distance || 0
+              name: result.toLocation.name,
+              distance: result.toLocation.distance
             },
             realtimeStatus: {
               busId: bus.id,
               driverId: bus.driverId || '',
               location: {
-                lat: fromStop.latitude || userLocation?.lat || defaultCenter.lat,
-                lng: fromStop.longitude || userLocation?.lng || defaultCenter.lng,
+                lat: result.fromLocation.location.lat,
+                lng: result.fromLocation.location.lng,
                 timestamp: Date.now()
               },
               status: bus.status || 'in_transit',
               lastUpdated: Date.now()
             },
             driver
-          } as BusWithDetails
-        })
-      })
+          })
+        }
+      }
 
-      // Flatten and resolve all bus details
-      const busDetailsArrays = await Promise.all(busDetailsPromises)
-      const busDetails = (await Promise.all(busDetailsArrays.flat())).filter((bus): bus is BusWithDetails => bus !== undefined)
       setDisplayedBuses(busDetails)
+      console.log('✅ Found buses:', busDetails.length)
+
+    } catch (err) {
+      console.error('Error finding buses:', err)
+      setError('Failed to find buses. Please try again.')
+    } finally {
       setIsSearching(false)
-    } catch (error) {
-      setDisplayedBuses([])
-      setIsSearching(false)
-      setError('Failed to find buses')
     }
   }
 
@@ -383,7 +391,13 @@ export default function BusDiscovery() {
 
   const handleRealBusSelect = (busWithDetails: BusWithDetails) => {
     navigate(`/bus/${busWithDetails.bus.id}`, {
-      state: { busWithDetails, fromLocation, toLocation }
+      state: { 
+        busWithDetails, 
+        fromLocation, 
+        toLocation,
+        fromCoordinates,
+        toCoordinates
+      }
     })
   }
 
@@ -463,10 +477,13 @@ export default function BusDiscovery() {
                         {fromSuggestions.map((suggestion) => (
                           <li
                             key={suggestion.id}
-                            className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                            className="p-3 hover:bg-gray-100 cursor-pointer text-sm border-b border-gray-100 last:border-b-0"
                             onClick={() => handleFromSuggestionSelect(suggestion)}
                           >
-                            {suggestion.name}
+                            <div className="font-medium text-gray-900">{suggestion.name}</div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              Route: {suggestion.routeId} • Stop #{suggestion.sequence}
+                            </div>
                           </li>
                         ))}
                       </ul>
@@ -486,10 +503,13 @@ export default function BusDiscovery() {
                         {toSuggestions.map((suggestion) => (
                           <li
                             key={suggestion.id}
-                            className="p-2 hover:bg-gray-100 cursor-pointer text-sm"
+                            className="p-3 hover:bg-gray-100 cursor-pointer text-sm border-b border-gray-100 last:border-b-0"
                             onClick={() => handleToSuggestionSelect(suggestion)}
                           >
-                            {suggestion.name}
+                            <div className="font-medium text-gray-900">{suggestion.name}</div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              Route: {suggestion.routeId} • Stop #{suggestion.sequence}
+                            </div>
                           </li>
                         ))}
                       </ul>

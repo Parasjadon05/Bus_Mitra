@@ -72,9 +72,11 @@ export class SearchService {
     try {
       console.log('🔍 Starting bus search with params:', params)
       
-      // Get all active routes
-      const routes = await routeService.getAllActiveRoutes()
+      // Get all active routes from Firestore
+      const routes = await routeService.getAllRoutes()
       console.log('📊 Found routes:', routes.length)
+      console.log('📋 Route IDs:', routes.map(r => r.id))
+      console.log('📋 Route names:', routes.map(r => r.name))
       
       if (routes.length === 0) {
         console.log('❌ No routes available')
@@ -110,15 +112,15 @@ export class SearchService {
       console.log('📍 From location:', fromLocation)
       console.log('📍 To location:', toLocation)
 
-      // Find routes that are close to both locations
-      const matchingRoutes = await this.findMatchingRoutes(routes, fromLocation, toLocation, params.maxDistance)
+      // Find routes that connect both locations
+      const matchingRoutes = await this.findConnectingRoutes(routes, fromLocation, toLocation, params.maxDistance)
       console.log('🎯 Matching routes found:', matchingRoutes.length)
 
       // Get buses for each matching route
       const searchResults: BusSearchResult[] = []
       
       for (const routeMatch of matchingRoutes) {
-        const buses = await routeService.getBusesByRoute(routeMatch.route.id)
+        const buses = await routeService.getBusesByAssignedRoute(routeMatch.route.id)
         
         if (buses.length > 0) {
           // Get addresses for the locations
@@ -158,7 +160,116 @@ export class SearchService {
   }
 
   /**
-   * Find routes that match the journey requirements
+   * Find routes that connect both from and to locations
+   */
+  private async findConnectingRoutes(
+    routes: Route[], 
+    fromLocation: Location, 
+    toLocation: Location, 
+    maxDistance: number
+  ): Promise<Array<{
+    route: Route
+    fromStop?: { name: string; location: Location; sequence: number }
+    toStop?: { name: string; location: Location; sequence: number }
+    fromDistance: number
+    toDistance: number
+  }>> {
+    const connectingRoutes: Array<{
+      route: Route
+      fromStop?: { name: string; location: Location; sequence: number }
+      toStop?: { name: string; location: Location; sequence: number }
+      fromDistance: number
+      toDistance: number
+    }> = []
+
+    console.log('🔍 Searching for connecting routes...')
+    console.log('📍 From location:', fromLocation)
+    console.log('📍 To location:', toLocation)
+    console.log('📏 Max distance:', maxDistance)
+
+    for (const route of routes) {
+      if (!route.stops || route.stops.length === 0) {
+        console.log(`❌ Route ${route.id} has no stops`)
+        continue
+      }
+
+      console.log(`🔍 Checking route ${route.id}: ${route.name}`)
+      console.log(`📍 Route has ${route.stops.length} stops`)
+
+      // Find the closest stop to from location
+      let closestFromStop: { name: string; location: Location; sequence: number } | undefined
+      let minFromDistance = Infinity
+
+      // Find the closest stop to to location
+      let closestToStop: { name: string; location: Location; sequence: number } | undefined
+      let minToDistance = Infinity
+
+      for (const stop of route.stops) {
+        const stopLocation: Location = {
+          lat: stop.latitude,
+          lng: stop.longitude
+        }
+
+        const fromDistance = googleMapsService.calculateDistance(fromLocation, stopLocation)
+        const toDistance = googleMapsService.calculateDistance(toLocation, stopLocation)
+
+        console.log(`  🚏 Stop ${stop.name} (seq: ${stop.sequence}): from=${fromDistance.toFixed(2)}m, to=${toDistance.toFixed(2)}m`)
+
+        if (fromDistance < minFromDistance) {
+          minFromDistance = fromDistance
+          closestFromStop = {
+            name: stop.name,
+            location: stopLocation,
+            sequence: stop.sequence
+          }
+        }
+
+        if (toDistance < minToDistance) {
+          minToDistance = toDistance
+          closestToStop = {
+            name: stop.name,
+            location: stopLocation,
+            sequence: stop.sequence
+          }
+        }
+      }
+
+      console.log(`  📍 Closest from stop: ${closestFromStop?.name} (${minFromDistance.toFixed(2)}m)`)
+      console.log(`  📍 Closest to stop: ${closestToStop?.name} (${minToDistance.toFixed(2)}m)`)
+
+      // Check if both locations are within max distance
+      const withinDistance = minFromDistance <= maxDistance && minToDistance <= maxDistance
+      const hasValidStops = closestFromStop && closestToStop
+      const correctSequence = closestFromStop && closestToStop && closestFromStop.sequence < closestToStop.sequence
+
+      console.log(`  ✅ Within distance: ${withinDistance}`)
+      console.log(`  ✅ Has valid stops: ${hasValidStops}`)
+      console.log(`  ✅ Correct sequence: ${correctSequence}`)
+
+      if (withinDistance && hasValidStops && correctSequence) {
+        console.log(`  🎯 Route ${route.id} MATCHES!`)
+        connectingRoutes.push({
+          route,
+          fromStop: closestFromStop,
+          toStop: closestToStop,
+          fromDistance: minFromDistance,
+          toDistance: minToDistance
+        })
+      } else {
+        console.log(`  ❌ Route ${route.id} does not match`)
+      }
+    }
+
+    console.log(`🎯 Found ${connectingRoutes.length} connecting routes`)
+
+    // Sort by total distance (from + to)
+    return connectingRoutes.sort((a, b) => 
+      (a.fromDistance + a.toDistance) - (b.fromDistance + b.toDistance)
+    )
+  }
+
+  /**
+   * Find routes that match the journey requirements (legacy method)
    */
   private async findMatchingRoutes(
     routes: Route[], 

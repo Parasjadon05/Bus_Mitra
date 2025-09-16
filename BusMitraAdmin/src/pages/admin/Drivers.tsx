@@ -35,15 +35,16 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { driverService, Driver, generateDriverId, generateDriverPassword } from "@/lib/firebaseService";
 
-// Form validation schema
+// Form validation schema following Firestore schema
 const driverSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  name: z.string().min(1, "Name is required").max(100, "Name too long"),
   email: z.string().email("Please enter a valid email address"),
-  phone: z.string().min(10, "Phone number must be at least 10 digits"),
-  licenseNumber: z.string().min(1, "License number is required"),
-  licenseExpiry: z.string().min(1, "License expiry date is required"),
-  address: z.string().min(1, "Address is required"),
-  status: z.enum(["active", "inactive", "suspended"]),
+  phone: z.string().min(10, "Phone number must be at least 10 digits").max(20, "Phone number too long"),
+  licenseNumber: z.string().min(1, "License number is required").max(50, "License number too long"),
+  experience: z.string().min(1, "Experience is required").max(50, "Experience description too long"),
+  assignedRoute: z.string().optional(),
+  busNumber: z.string().optional(),
+  status: z.enum(["available", "unavailable", "on_break", "off_duty"]),
 });
 
 type DriverFormData = z.infer<typeof driverSchema>;
@@ -124,6 +125,10 @@ export default function Drivers() {
           ...data,
           driverId,
           password,
+          id: `driver_${Date.now()}`, // Generate unique document ID
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString(),
         };
         
         console.log("Driver data to save:", driverData);
@@ -165,8 +170,9 @@ export default function Drivers() {
     setValue("email", driver.email);
     setValue("phone", driver.phone);
     setValue("licenseNumber", driver.licenseNumber);
-    setValue("licenseExpiry", driver.licenseExpiry);
-    setValue("address", driver.address);
+    setValue("experience", driver.experience || "");
+    setValue("assignedRoute", driver.assignedRoute || "");
+    setValue("busNumber", driver.busNumber || "");
     setValue("status", driver.status);
     setIsEditDialogOpen(true);
   };
@@ -255,22 +261,35 @@ export default function Drivers() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "active":
-        return "bg-success text-success-foreground";
-      case "inactive":
-        return "bg-muted text-muted-foreground";
-      case "suspended":
-        return "bg-destructive text-destructive-foreground";
+      case "available":
+        return "bg-green-100 text-green-800";
+      case "unavailable":
+        return "bg-red-100 text-red-800";
+      case "on_break":
+        return "bg-yellow-100 text-yellow-800";
+      case "off_duty":
+        return "bg-gray-100 text-gray-800";
       default:
-        return "bg-muted text-muted-foreground";
+        return "bg-gray-100 text-gray-800";
     }
   };
 
   const getStatusLabel = (status: string) => {
-    return status.charAt(0).toUpperCase() + status.slice(1);
+    switch (status) {
+      case "available":
+        return "Available";
+      case "unavailable":
+        return "Unavailable";
+      case "on_break":
+        return "On Break";
+      case "off_duty":
+        return "Off Duty";
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
   };
 
-  const activeDrivers = drivers.filter(d => d.status === "active").length;
+  const activeDrivers = drivers.filter(d => d.status === "available").length;
   const totalDrivers = drivers.length;
 
   return (
@@ -289,106 +308,122 @@ export default function Drivers() {
               Add New Driver
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>Add New Driver</DialogTitle>
             </DialogHeader>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
-                <Input 
-                  id="name" 
-                  placeholder="Rajesh Kumar" 
-                  {...register("name")}
-                  className={errors.name ? "border-destructive" : ""}
-                />
-                {errors.name && (
-                  <p className="text-sm text-destructive">{errors.name.message}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input 
-                  id="email" 
-                  type="email"
-                  placeholder="rajesh@example.com" 
-                  {...register("email")}
-                  className={errors.email ? "border-destructive" : ""}
-                />
-                {errors.email && (
-                  <p className="text-sm text-destructive">{errors.email.message}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="phone">Phone Number</Label>
-                <Input 
-                  id="phone" 
-                  placeholder="+91 98765 43210" 
-                  {...register("phone")}
-                  className={errors.phone ? "border-destructive" : ""}
-                />
-                {errors.phone && (
-                  <p className="text-sm text-destructive">{errors.phone.message}</p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+              {/* Basic Information */}
+              <div className="space-y-3">
                 <div className="space-y-2">
-                  <Label htmlFor="licenseNumber">License Number</Label>
+                  <Label htmlFor="name">Full Name</Label>
                   <Input 
-                    id="licenseNumber" 
-                    placeholder="KA-12-20180001234" 
-                    {...register("licenseNumber")}
-                    className={errors.licenseNumber ? "border-destructive" : ""}
+                    id="name" 
+                    placeholder="Rajesh Kumar" 
+                    {...register("name")}
+                    className={errors.name ? "border-red-500" : ""}
                   />
-                  {errors.licenseNumber && (
-                    <p className="text-sm text-destructive">{errors.licenseNumber.message}</p>
+                  {errors.name && (
+                    <p className="text-sm text-red-500">{errors.name.message}</p>
                   )}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="licenseExpiry">License Expiry</Label>
-                  <Input 
-                    id="licenseExpiry" 
-                    type="date"
-                    {...register("licenseExpiry")}
-                    className={errors.licenseExpiry ? "border-destructive" : ""}
-                  />
-                  {errors.licenseExpiry && (
-                    <p className="text-sm text-destructive">{errors.licenseExpiry.message}</p>
-                  )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email Address</Label>
+                    <Input 
+                      id="email" 
+                      type="email"
+                      placeholder="rajesh.kumar@busmitra.com" 
+                      {...register("email")}
+                      className={errors.email ? "border-red-500" : ""}
+                    />
+                    {errors.email && (
+                      <p className="text-sm text-red-500">{errors.email.message}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Phone Number</Label>
+                    <Input 
+                      id="phone" 
+                      placeholder="+91 9876543210" 
+                      {...register("phone")}
+                      className={errors.phone ? "border-red-500" : ""}
+                    />
+                    {errors.phone && (
+                      <p className="text-sm text-red-500">{errors.phone.message}</p>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="address">Address</Label>
-                <Input 
-                  id="address" 
-                  placeholder="123 Main Street, City, State" 
-                  {...register("address")}
-                  className={errors.address ? "border-destructive" : ""}
-                />
-                {errors.address && (
-                  <p className="text-sm text-destructive">{errors.address.message}</p>
-                )}
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="licenseNumber">License Number</Label>
+                    <Input 
+                      id="licenseNumber" 
+                      placeholder="DL042011234567" 
+                      {...register("licenseNumber")}
+                      className={errors.licenseNumber ? "border-red-500" : ""}
+                    />
+                    {errors.licenseNumber && (
+                      <p className="text-sm text-red-500">{errors.licenseNumber.message}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="experience">Experience</Label>
+                    <Input 
+                      id="experience" 
+                      placeholder="5 years" 
+                      {...register("experience")}
+                      className={errors.experience ? "border-red-500" : ""}
+                    />
+                    {errors.experience && (
+                      <p className="text-sm text-red-500">{errors.experience.message}</p>
+                    )}
+                  </div>
+                </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="status">Status</Label>
-                <Select onValueChange={(value) => setValue("status", value as "active" | "inactive" | "suspended")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="suspended">Suspended</SelectItem>
-                  </SelectContent>
-                </Select>
-                {errors.status && (
-                  <p className="text-sm text-destructive">{errors.status.message}</p>
-                )}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="assignedRoute">Assigned Route</Label>
+                    <Input 
+                      id="assignedRoute" 
+                      placeholder="route_520" 
+                      {...register("assignedRoute")}
+                      className={errors.assignedRoute ? "border-red-500" : ""}
+                    />
+                    {errors.assignedRoute && (
+                      <p className="text-sm text-red-500">{errors.assignedRoute.message}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="busNumber">Bus Number</Label>
+                    <Input 
+                      id="busNumber" 
+                      placeholder="KA01AB1234" 
+                      {...register("busNumber")}
+                      className={errors.busNumber ? "border-red-500" : ""}
+                    />
+                    {errors.busNumber && (
+                      <p className="text-sm text-red-500">{errors.busNumber.message}</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="status">Status</Label>
+                    <select 
+                      {...register("status")}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      <option value="available">Available</option>
+                      <option value="unavailable">Unavailable</option>
+                      <option value="on_break">On Break</option>
+                      <option value="off_duty">Off Duty</option>
+                    </select>
+                    {errors.status && (
+                      <p className="text-sm text-red-500">{errors.status.message}</p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end space-x-2 pt-4">
@@ -438,7 +473,7 @@ export default function Drivers() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Active Drivers</p>
+                <p className="text-sm text-muted-foreground">Available Drivers</p>
                 <p className="text-2xl font-bold text-success">{activeDrivers}</p>
               </div>
               <div className="h-8 w-8 bg-success/10 rounded-lg flex items-center justify-center">
@@ -451,9 +486,9 @@ export default function Drivers() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Inactive Drivers</p>
+                <p className="text-sm text-muted-foreground">Unavailable Drivers</p>
                 <p className="text-2xl font-bold text-muted-foreground">
-                  {drivers.filter(d => d.status === "inactive").length}
+                  {drivers.filter(d => d.status === "unavailable" || d.status === "off_duty").length}
                 </p>
               </div>
               <div className="h-8 w-8 bg-muted/20 rounded-lg flex items-center justify-center">
@@ -688,106 +723,122 @@ export default function Drivers() {
 
       {/* Edit Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit Driver</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="edit-name">Full Name</Label>
-              <Input 
-                id="edit-name" 
-                placeholder="Rajesh Kumar" 
-                {...register("name")}
-                className={errors.name ? "border-destructive" : ""}
-              />
-              {errors.name && (
-                <p className="text-sm text-destructive">{errors.name.message}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-email">Email Address</Label>
-              <Input 
-                id="edit-email" 
-                type="email"
-                placeholder="rajesh@example.com" 
-                {...register("email")}
-                className={errors.email ? "border-destructive" : ""}
-              />
-              {errors.email && (
-                <p className="text-sm text-destructive">{errors.email.message}</p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="edit-phone">Phone Number</Label>
-              <Input 
-                id="edit-phone" 
-                placeholder="+91 98765 43210" 
-                {...register("phone")}
-                className={errors.phone ? "border-destructive" : ""}
-              />
-              {errors.phone && (
-                <p className="text-sm text-destructive">{errors.phone.message}</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+            {/* Basic Information */}
+            <div className="space-y-3">
               <div className="space-y-2">
-                <Label htmlFor="edit-licenseNumber">License Number</Label>
+                <Label htmlFor="edit-name">Full Name</Label>
                 <Input 
-                  id="edit-licenseNumber" 
-                  placeholder="KA-12-20180001234" 
-                  {...register("licenseNumber")}
-                  className={errors.licenseNumber ? "border-destructive" : ""}
+                  id="edit-name" 
+                  placeholder="Rajesh Kumar" 
+                  {...register("name")}
+                  className={errors.name ? "border-red-500" : ""}
                 />
-                {errors.licenseNumber && (
-                  <p className="text-sm text-destructive">{errors.licenseNumber.message}</p>
+                {errors.name && (
+                  <p className="text-sm text-red-500">{errors.name.message}</p>
                 )}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-licenseExpiry">License Expiry</Label>
-                <Input 
-                  id="edit-licenseExpiry" 
-                  type="date"
-                  {...register("licenseExpiry")}
-                  className={errors.licenseExpiry ? "border-destructive" : ""}
-                />
-                {errors.licenseExpiry && (
-                  <p className="text-sm text-destructive">{errors.licenseExpiry.message}</p>
-                )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-email">Email Address</Label>
+                  <Input 
+                    id="edit-email" 
+                    type="email"
+                    placeholder="rajesh.kumar@busmitra.com" 
+                    {...register("email")}
+                    className={errors.email ? "border-red-500" : ""}
+                  />
+                  {errors.email && (
+                    <p className="text-sm text-red-500">{errors.email.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-phone">Phone Number</Label>
+                  <Input 
+                    id="edit-phone" 
+                    placeholder="+91 9876543210" 
+                    {...register("phone")}
+                    className={errors.phone ? "border-red-500" : ""}
+                  />
+                  {errors.phone && (
+                    <p className="text-sm text-red-500">{errors.phone.message}</p>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="edit-address">Address</Label>
-              <Input 
-                id="edit-address" 
-                placeholder="123 Main Street, City, State" 
-                {...register("address")}
-                className={errors.address ? "border-destructive" : ""}
-              />
-              {errors.address && (
-                <p className="text-sm text-destructive">{errors.address.message}</p>
-              )}
-            </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-licenseNumber">License Number</Label>
+                  <Input 
+                    id="edit-licenseNumber" 
+                    placeholder="DL042011234567" 
+                    {...register("licenseNumber")}
+                    className={errors.licenseNumber ? "border-red-500" : ""}
+                  />
+                  {errors.licenseNumber && (
+                    <p className="text-sm text-red-500">{errors.licenseNumber.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-experience">Experience</Label>
+                  <Input 
+                    id="edit-experience" 
+                    placeholder="5 years" 
+                    {...register("experience")}
+                    className={errors.experience ? "border-red-500" : ""}
+                  />
+                  {errors.experience && (
+                    <p className="text-sm text-red-500">{errors.experience.message}</p>
+                  )}
+                </div>
+              </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="edit-status">Status</Label>
-              <Select onValueChange={(value) => setValue("status", value as "active" | "inactive" | "suspended")}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                  <SelectItem value="suspended">Suspended</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.status && (
-                <p className="text-sm text-destructive">{errors.status.message}</p>
-              )}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-assignedRoute">Assigned Route</Label>
+                  <Input 
+                    id="edit-assignedRoute" 
+                    placeholder="route_520" 
+                    {...register("assignedRoute")}
+                    className={errors.assignedRoute ? "border-red-500" : ""}
+                  />
+                  {errors.assignedRoute && (
+                    <p className="text-sm text-red-500">{errors.assignedRoute.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-busNumber">Bus Number</Label>
+                  <Input 
+                    id="edit-busNumber" 
+                    placeholder="KA01AB1234" 
+                    {...register("busNumber")}
+                    className={errors.busNumber ? "border-red-500" : ""}
+                  />
+                  {errors.busNumber && (
+                    <p className="text-sm text-red-500">{errors.busNumber.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-status">Status</Label>
+                  <select 
+                    {...register("status")}
+                    className="w-full p-2 border rounded-md"
+                  >
+                    <option value="available">Available</option>
+                    <option value="unavailable">Unavailable</option>
+                    <option value="on_break">On Break</option>
+                    <option value="off_duty">Off Duty</option>
+                  </select>
+                  {errors.status && (
+                    <p className="text-sm text-red-500">{errors.status.message}</p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="flex justify-end space-x-2 pt-4">

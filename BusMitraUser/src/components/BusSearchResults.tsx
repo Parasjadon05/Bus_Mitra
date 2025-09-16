@@ -125,10 +125,10 @@ export function BusSearchResults({
                   <span className="font-medium text-gray-700">From:</span>
                 </div>
                 <p className="text-sm text-gray-600 ml-6">
-                  {result.fromBusStand.name}
+                  {result.fromLocation.name}
                 </p>
                 <p className="text-xs text-gray-500 ml-6">
-                  {result.fromBusStand.distance.toFixed(1)} km away
+                  {result.fromLocation.distance.toFixed(1)} km away
                 </p>
               </div>
 
@@ -138,10 +138,10 @@ export function BusSearchResults({
                   <span className="font-medium text-gray-700">To:</span>
                 </div>
                 <p className="text-sm text-gray-600 ml-6">
-                  {result.toBusStand.name}
+                  {result.toLocation.name}
                 </p>
                 <p className="text-xs text-gray-500 ml-6">
-                  {result.toBusStand.distance.toFixed(1)} km away
+                  {result.toLocation.distance.toFixed(1)} km away
                 </p>
               </div>
             </div>

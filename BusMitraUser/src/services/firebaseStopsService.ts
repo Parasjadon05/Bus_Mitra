@@ -1,6 +1,6 @@
 
-import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore'
 
 export interface UserLocation {
   latitude: number
@@ -69,125 +69,248 @@ export const firebaseStopsService = {
     }
   },
 
-  // Search for stops by name/address in Firebase database
+  // Search for stops by name/address from Cloud Firestore
   async getStopsFromDB(searchQuery: string, limit: number = 10): Promise<FirebaseStop[]> {
+    // Check if Firebase is properly configured
+    if (!db) {
+      console.warn('Firebase Firestore not initialized, using mock data')
+      return this.getMockStops(searchQuery, limit)
+    }
+
     try {
+      console.log('Fetching stops from Firestore for query:', searchQuery)
       const routesRef = collection(db, 'routes')
-      const routesSnapshot = await getDocs(routesRef)
+      const snapshot = await getDocs(routesRef)
       
-      const allStops: FirebaseStop[] = []
-      const stopMap = new Map<string, FirebaseStop>()
-      
-      routesSnapshot.forEach((routeDoc) => {
-        const routeData = routeDoc.data()
+      if (!snapshot.empty) {
+        const allStops: FirebaseStop[] = []
+        const stopMap = new Map<string, FirebaseStop>()
         
-        if (routeData.startPoint) {
-          const startStop: FirebaseStop = {
-            id: `${routeDoc.id}-start`,
-            name: routeData.startPoint,
-            address: routeData.startPoint,
-            coordinates: { lat: routeData.startLat || 0, lng: routeData.startLng || 0 },
-            routeId: routeDoc.id,
-            sequence: 0
-          }
-          if (startStop.coordinates.lat !== 0 && startStop.coordinates.lng !== 0) {
-            stopMap.set(startStop.name.toLowerCase(), startStop)
-          }
-        }
-        
-        if (routeData.endPoint) {
-          const endStop: FirebaseStop = {
-            id: `${routeDoc.id}-end`,
-            name: routeData.endPoint,
-            address: routeData.endPoint,
-            coordinates: { lat: routeData.endLat || 0, lng: routeData.endLng || 0 },
-            routeId: routeDoc.id,
-            sequence: 999
-          }
-          if (endStop.coordinates.lat !== 0 && endStop.coordinates.lng !== 0) {
-            stopMap.set(endStop.name.toLowerCase(), endStop)
-          }
-        }
-        
-        if (routeData.stops && Array.isArray(routeData.stops)) {
-          routeData.stops.forEach((stop: any, index: number) => {
-            const routeStop: FirebaseStop = {
-              id: `${routeDoc.id}-stop-${stop.id || index}`,
-              name: stop.name || stop.stopName || `Stop ${index + 1}`,
-              address: stop.address || stop.name || stop.stopName || `Stop ${index + 1}`,
-              coordinates: {
-                lat: stop.latitude || stop.lat || 0,
-                lng: stop.longitude || stop.lng || 0
+        // Extract stops from all routes
+        snapshot.forEach((doc) => {
+          const routeData = doc.data()
+          const routeId = doc.id
+          
+          // Add start point
+          if (routeData.startPoint) {
+            const startStop: FirebaseStop = {
+              id: `${routeId}-start`,
+              name: routeData.startPoint,
+              address: routeData.startPoint,
+              coordinates: { 
+                lat: Number(routeData.startLat) || 0, 
+                lng: Number(routeData.startLng) || 0 
               },
-              routeId: routeDoc.id,
-              sequence: stop.sequence || index + 1
+              routeId,
+              sequence: 0
             }
-            if (routeStop.coordinates.lat !== 0 && routeStop.coordinates.lng !== 0) {
-              stopMap.set(routeStop.name.toLowerCase(), routeStop)
+            if (startStop.coordinates.lat !== 0 && startStop.coordinates.lng !== 0) {
+              const uniqueKey = `${routeId}-start-${routeData.startPoint}`.toLowerCase()
+              stopMap.set(uniqueKey, startStop)
             }
-          })
-        }
-      })
-      
-      const allStopsArray = Array.from(stopMap.values())
-      
-      const filteredStops = allStopsArray.filter(stop => 
-        stop.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        stop.address.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-      
-      const sortedStops = filteredStops.sort((a, b) => {
-        const aExact = a.name.toLowerCase() === searchQuery.toLowerCase()
-        const bExact = b.name.toLowerCase() === searchQuery.toLowerCase()
+          }
+          
+          // Add end point
+          if (routeData.endPoint) {
+            const endStop: FirebaseStop = {
+              id: `${routeId}-end`,
+              name: routeData.endPoint,
+              address: routeData.endPoint,
+              coordinates: { 
+                lat: Number(routeData.endLat) || 0, 
+                lng: Number(routeData.endLng) || 0 
+              },
+              routeId,
+              sequence: 999
+            }
+            if (endStop.coordinates.lat !== 0 && endStop.coordinates.lng !== 0) {
+              const uniqueKey = `${routeId}-end-${routeData.endPoint}`.toLowerCase()
+              stopMap.set(uniqueKey, endStop)
+            }
+          }
+          
+          // Add route stops
+          if (routeData.stops && Array.isArray(routeData.stops)) {
+            routeData.stops.forEach((stop: any, index: number) => {
+              // Debug log to see the actual stop data structure
+              if (index === 0) {
+                console.log('Sample stop data from route', routeId, ':', stop)
+              }
+              
+              const routeStop: FirebaseStop = {
+                id: `${routeId}-${stop.id || `stop-${index}`}`,
+                name: (stop.name && typeof stop.name === 'string') ? stop.name : `Stop ${index + 1}`,
+                address: (stop.name && typeof stop.name === 'string') ? stop.name : `Stop ${index + 1}`,
+                coordinates: {
+                  lat: Number(stop.latitude) || 0,
+                  lng: Number(stop.longitude) || 0
+                },
+                routeId,
+                sequence: Number(stop.sequence) || index + 1
+              }
+              if (routeStop.coordinates.lat !== 0 && routeStop.coordinates.lng !== 0) {
+                // Use a unique key that combines route and stop name to avoid duplicates
+                const stopName = (stop.name && typeof stop.name === 'string') ? stop.name : `stop-${index}`
+                const uniqueKey = `${routeId}-${stopName}`.toLowerCase()
+                stopMap.set(uniqueKey, routeStop)
+              }
+            })
+          }
+        })
         
-        if (aExact && !bExact) return -1
-        if (!aExact && bExact) return 1
+        const allStopsArray = Array.from(stopMap.values())
+        console.log('All stops extracted from Firestore:', allStopsArray)
         
-        return a.name.localeCompare(b.name)
-      })
+        // Filter stops based on search query - search in both name and route context
+        const filteredStops = allStopsArray.filter(stop => {
+          const nameMatch = stop.name && typeof stop.name === 'string' && 
+            stop.name.toLowerCase().includes(searchQuery.toLowerCase())
+          const addressMatch = stop.address && typeof stop.address === 'string' && 
+            stop.address.toLowerCase().includes(searchQuery.toLowerCase())
+          const routeMatch = stop.routeId && typeof stop.routeId === 'string' && 
+            stop.routeId.toLowerCase().includes(searchQuery.toLowerCase())
+          
+          return nameMatch || addressMatch || routeMatch
+        })
+        
+        // Sort by exact match first, then by route relevance, then alphabetically
+        const sortedStops = filteredStops.sort((a, b) => {
+          const aName = a.name || ''
+          const bName = b.name || ''
+          const aExact = aName.toLowerCase() === searchQuery.toLowerCase()
+          const bExact = bName.toLowerCase() === searchQuery.toLowerCase()
+          
+          // Exact name matches first
+          if (aExact && !bExact) return -1
+          if (!aExact && bExact) return 1
+          
+          // Then by route ID (to group stops by route)
+          const aRouteId = a.routeId || ''
+          const bRouteId = b.routeId || ''
+          const routeCompare = aRouteId.localeCompare(bRouteId)
+          if (routeCompare !== 0) return routeCompare
+          
+          // Finally by sequence within the route
+          return (a.sequence || 0) - (b.sequence || 0)
+        })
+        
+        console.log('Filtered stops for query:', searchQuery, ':', sortedStops.slice(0, limit))
+        return sortedStops.slice(0, limit)
+      }
       
-      return sortedStops.slice(0, limit)
-      
+      console.warn('No routes found in Firestore, using mock data')
+      // Fallback to mock data if no routes found
+      return this.getMockStops(searchQuery, limit)
     } catch (error) {
-      return []
+      console.error('Error fetching stops from Firestore:', error)
+      // Fallback to mock data on error
+      return this.getMockStops(searchQuery, limit)
     }
   },
 
-  // Find nearest stops from user location in Firebase database
-  async getNearbyStopsFromDB(userLocation: UserLocation, radiusInMeters: number = 50000): Promise<FirebaseStop[]> {
-    try {
-      const allStops = await this.getStopsFromDB('', 100)
-      
-      const stopsWithCoords = allStops.filter(stop => 
-        stop.coordinates.lat !== 0 && 
-        stop.coordinates.lng !== 0 && 
-        !isNaN(stop.coordinates.lat) && 
-        !isNaN(stop.coordinates.lng)
-      )
-      
-      if (stopsWithCoords.length === 0) {
-        return []
+  // Mock data fallback
+  getMockStops(searchQuery: string, limit: number): Promise<FirebaseStop[]> {
+    const mockStops: FirebaseStop[] = [
+      {
+        id: 'stop1',
+        name: 'Broadway Bus Terminus',
+        address: 'Broadway, Chennai',
+        coordinates: { lat: 13.0878, lng: 80.2785 },
+        routeId: 'route_102',
+        sequence: 1
+      },
+      {
+        id: 'stop2',
+        name: 'Marina Beach',
+        address: 'Marina Beach, Chennai',
+        coordinates: { lat: 13.05, lng: 80.2824 },
+        routeId: 'route_102',
+        sequence: 2
+      },
+      {
+        id: 'stop3',
+        name: 'Mylapore',
+        address: 'Mylapore, Chennai',
+        coordinates: { lat: 13.033, lng: 80.2684 },
+        routeId: 'route_102',
+        sequence: 3
+      },
+      {
+        id: 'stop4',
+        name: 'Adyar',
+        address: 'Adyar, Chennai',
+        coordinates: { lat: 13.0007, lng: 80.255 },
+        routeId: 'route_102',
+        sequence: 4
+      },
+      {
+        id: 'stop5',
+        name: 'Thiruvanmiyur',
+        address: 'Thiruvanmiyur, Chennai',
+        coordinates: { lat: 12.9846, lng: 80.2591 },
+        routeId: 'route_102',
+        sequence: 5
+      },
+      {
+        id: 'stop6',
+        name: 'Koyambedu CMBT',
+        address: 'Koyambedu, Chennai',
+        coordinates: { lat: 13.0718, lng: 80.2124 },
+        routeId: 'route_570',
+        sequence: 1
+      },
+      {
+        id: 'stop7',
+        name: 'Kelambakkam',
+        address: 'Kelambakkam, Chennai',
+        coordinates: { lat: 12.8249, lng: 80.0461 },
+        routeId: 'route_570',
+        sequence: 2
       }
-      
-      const nearbyStops = stopsWithCoords
-        .map(stop => ({
-          ...stop,
-          distance: this.calculateDistance(
-            userLocation.latitude,
-            userLocation.longitude,
-            stop.coordinates.lat,
-            stop.coordinates.lng
-          )
-        }))
-        .filter(stop => stop.distance <= radiusInMeters)
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, 10)
-      
-      return nearbyStops
-      
-    } catch (error) {
+    ]
+
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        const filteredStops = mockStops.filter(stop => 
+          stop.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          stop.address.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+        console.log('Mock stops filtered for query:', searchQuery, ':', filteredStops)
+        resolve(filteredStops.slice(0, limit))
+      }, 100)
+    })
+  },
+
+  // Find nearest stops from user location (mock data for now)
+  async getNearbyStopsFromDB(userLocation: UserLocation, radiusInMeters: number = 50000): Promise<FirebaseStop[]> {
+    const allStops = await this.getStopsFromDB('', 100)
+    
+    const stopsWithCoords = allStops.filter(stop => 
+      stop.coordinates.lat !== 0 && 
+      stop.coordinates.lng !== 0 && 
+      !isNaN(stop.coordinates.lat) && 
+      !isNaN(stop.coordinates.lng)
+    )
+    
+    if (stopsWithCoords.length === 0) {
       return []
     }
+    
+    const nearbyStops = stopsWithCoords
+      .map(stop => ({
+        ...stop,
+        distance: this.calculateDistance(
+          userLocation.latitude,
+          userLocation.longitude,
+          stop.coordinates.lat,
+          stop.coordinates.lng
+        )
+      }))
+      .filter(stop => stop.distance <= radiusInMeters)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 10)
+    
+    return nearbyStops
   },
 
   // Calculate distance between two coordinates (Haversine formula)

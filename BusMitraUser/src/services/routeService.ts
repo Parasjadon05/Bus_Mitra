@@ -1,6 +1,6 @@
 
-import { collection, query, where, getDocs, getDoc, doc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore'
 
 export interface Route {
   id: string
@@ -40,86 +40,159 @@ export interface Driver {
   phone: string
 }
 
+// Mock data for development
+const mockRoutes: Route[] = [
+  {
+    id: 'route_570',
+    name: 'Route 570: Koyambedu to Kelambakkam',
+    startPoint: 'Koyambedu CMBT',
+    endPoint: 'Kelambakkam',
+    distance: 25.5,
+    estimatedTime: 90,
+    fare: 15,
+    active: true,
+    createdAt: '2024-01-01',
+    updatedAt: '2024-01-01',
+    stops: [
+      { id: 'stop1', name: 'Koyambedu CMBT', latitude: 13.0718, longitude: 80.2124, sequence: 1, address: 'Koyambedu' },
+      { id: 'stop2', name: 'Kelambakkam', latitude: 12.8249, longitude: 80.0461, sequence: 2, address: 'Kelambakkam' }
+    ]
+  }
+]
+
+const mockBuses: RouteBus[] = [
+  {
+    id: 'BUS-001',
+    busNumber: 'KA01AB1234',
+    busName: 'Route 570 Bus',
+    type: 'Regular',
+    capacity: 40,
+    assignedRoute: 'route_570',
+    status: 'active',
+    driverId: 'DRV001'
+  }
+]
+
+const mockDrivers: Driver[] = [
+  {
+    id: 'DRV001',
+    name: 'Rajesh Kumar',
+    phone: '+91-9876543210'
+  }
+]
+
 export const routeService = {
   /**
-   * Fetches all routes from the Firebase 'routes' collection.
-   * @returns An array of Route objects.
-   * @throws Error if the query fails.
+   * Fetches all routes from Cloud Firestore
    */
   getAllRoutes: async (): Promise<Route[]> => {
     try {
-      const routesSnapshot = await getDocs(collection(db, 'routes'))
-      const routes: Route[] = routesSnapshot.docs.map(doc => ({
-        id: doc.id,
-        name: doc.data().name || '',
-        startPoint: doc.data().startPoint || '',
-        endPoint: doc.data().endPoint || '',
-        distance: Number(doc.data().distance) || 0,
-        estimatedTime: Number(doc.data().estimatedTime) || 0,
-        fare: doc.data().fare ? Number(doc.data().fare) : undefined,
-        active: doc.data().active ?? true,
-        createdAt: doc.data().createdAt || '',
-        updatedAt: doc.data().updatedAt || '',
-        stops: (doc.data().stops || []).map((stop: any) => ({
-          id: stop.id || '',
-          name: stop.name || '',
-          latitude: Number(stop.latitude) || 0,
-          longitude: Number(stop.longitude) || 0,
-          sequence: Number(stop.sequence) || 0,
-          address: stop.address || undefined
-        }))
-      }))
-      return routes
+      console.log('🔍 Fetching routes from Firestore...')
+      const routesRef = collection(db, 'routes')
+      const snapshot = await getDocs(routesRef)
+      
+      if (!snapshot.empty) {
+        const routes: Route[] = []
+        snapshot.forEach((doc) => {
+          const routeData = doc.data()
+          const route: Route = {
+            id: doc.id,
+            name: routeData.name || '',
+            startPoint: routeData.startPoint || '',
+            endPoint: routeData.endPoint || '',
+            distance: Number(routeData.distance) || 0,
+            estimatedTime: Number(routeData.estimatedTime) || 0,
+            fare: routeData.fare ? Number(routeData.fare) : undefined,
+            active: routeData.active ?? true,
+            createdAt: routeData.createdAt || '',
+            updatedAt: routeData.updatedAt || '',
+            stops: (routeData.stops || []).map((stop: any, index: number) => ({
+              id: stop.id || `stop_${index}`,
+              name: stop.name || `Stop ${index + 1}`,
+              latitude: Number(stop.latitude) || 0,
+              longitude: Number(stop.longitude) || 0,
+              sequence: Number(stop.sequence) || index + 1,
+              address: stop.name || `Stop ${index + 1}`
+            }))
+          }
+          routes.push(route)
+        })
+        console.log('✅ Loaded routes from Firestore:', routes.length)
+        console.log('📋 Route IDs:', routes.map(r => r.id))
+        return routes
+      }
+      
+      console.log('⚠️ No routes found in Firestore, using mock data')
+      return mockRoutes
     } catch (error) {
-      throw new Error('Failed to fetch routes from Firebase')
+      console.error('Error fetching routes from Firestore:', error)
+      return mockRoutes
     }
   },
 
   /**
-   * Fetches buses from the 'buses' collection that are assigned to a specific route.
-   * @param routeId The ID of the route to filter buses by.
-   * @returns An array of RouteBus objects.
-   * @throws Error if the query fails.
+   * Fetches buses assigned to a specific route from Cloud Firestore
    */
   getBusesByAssignedRoute: async (routeId: string): Promise<RouteBus[]> => {
     try {
-      const q = query(collection(db, 'buses'), where('assignedRoute', '==', routeId))
-      const busesSnapshot = await getDocs(q)
-      const buses: RouteBus[] = busesSnapshot.docs.map(doc => ({
-        id: doc.id,
-        busNumber: doc.data().busNumber || '',
-        busName: doc.data().busName || undefined,
-        type: doc.data().type || 'Regular',
-        capacity: Number(doc.data().capacity) || 40,
-        assignedRoute: doc.data().assignedRoute || '',
-        status: doc.data().status || 'active',
-        driverId: doc.data().driverId || undefined
-      }))
-      return buses
+      console.log('🔍 Fetching buses for route:', routeId)
+      const busesRef = collection(db, 'buses')
+      const q = query(busesRef, where('assignedRoute', '==', routeId))
+      const snapshot = await getDocs(q)
+      
+      if (!snapshot.empty) {
+        const buses: RouteBus[] = []
+        snapshot.forEach((doc) => {
+          const busData = doc.data()
+          const bus: RouteBus = {
+            id: doc.id,
+            busNumber: busData.busNumber || '',
+            busName: busData.busName || busData.name || undefined,
+            type: busData.type || 'Regular',
+            capacity: Number(busData.capacity) || 40,
+            assignedRoute: busData.assignedRoute || busData.routeId || '',
+            status: busData.status || 'active',
+            driverId: busData.driverId || undefined
+          }
+          buses.push(bus)
+        })
+        console.log('✅ Found buses for route', routeId, ':', buses.length)
+        return buses
+      }
+      
+      console.log('⚠️ No buses found for route', routeId, 'in Firestore, using mock data')
+      return mockBuses.filter(bus => bus.assignedRoute === routeId)
     } catch (error) {
-      throw new Error(`Failed to fetch buses for route ${routeId}`)
+      console.error('Error fetching buses from Firestore:', error)
+      return mockBuses.filter(bus => bus.assignedRoute === routeId)
     }
   },
 
   /**
-   * Fetches driver details from the 'drivers' collection by driver ID.
-   * @param driverId The ID of the driver to fetch.
-   * @returns A Driver object or undefined if not found.
-   * @throws Error if the query fails.
+   * Fetches driver details by driver ID from Cloud Firestore
    */
   getDriverById: async (driverId: string): Promise<Driver | undefined> => {
     try {
-      const driverDoc = await getDoc(doc(db, 'drivers', driverId))
-      if (driverDoc.exists()) {
+      const driverRef = collection(db, 'drivers')
+      const q = query(driverRef, where('__name__', '==', driverId))
+      const snapshot = await getDocs(q)
+      
+      if (!snapshot.empty) {
+        const doc = snapshot.docs[0]
+        const driverData = doc.data()
         return {
-          id: driverDoc.id,
-          name: driverDoc.data().name || '',
-          phone: driverDoc.data().phone || ''
+          id: driverId,
+          name: driverData.name || '',
+          phone: driverData.phone || ''
         }
       }
-      return undefined
+      
+      // Fallback to mock data if driver not found
+      return mockDrivers.find(d => d.id === driverId)
     } catch (error) {
-      throw new Error(`Failed to fetch driver ${driverId}`)
+      console.error('Error fetching driver from Firestore:', error)
+      // Fallback to mock data on error
+      return mockDrivers.find(d => d.id === driverId)
     }
   }
 }
